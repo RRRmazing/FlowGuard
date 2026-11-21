@@ -1,6 +1,6 @@
 # FlowGuard 流量哨兵
 
-计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。当前为阶段 0 工程骨架，尚未实现报文采集、解析、统计与回放。
+计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。当前已在阶段 0 工程骨架上实现阶段 1 的纯报文解析模块与测试，尚未接入报文采集、解析展示、统计与回放。
 
 ## 开发依赖
 
@@ -76,7 +76,7 @@ $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
 ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 ```
 
-CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出。
+CTest 包含 `packet_parser`（独立的协议解析测试）和 `stage0_smoke`。解析范围与验收方法见 [解析模块说明](src/parser/README.md)。`stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出。
 预期结果为 `100% tests passed`。这不能替代人工查看中文显示、窗口操作和退出是否正常。
 队友也应在自己的电脑上配置、构建和运行，确认工程能独立复现。
 
@@ -91,7 +91,7 @@ CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口�
 | `CMakePresets.json` | 共享构建选项 |
 | `src/core` | 原始报文和解析结果数据结构 |
 | `src/capture` | 后续采集、线程与有界缓冲 |
-| `src/parser` | 后续协议解析 |
+| `src/parser` | 纯报文解析与接口说明 |
 | `src/statistics` | 后续统计计算 |
 | `src/storage` | 后续 PCAP 读写 |
 | `src/ui` | 窗口与显示 |
