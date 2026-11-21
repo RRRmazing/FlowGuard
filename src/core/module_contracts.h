@@ -1,12 +1,13 @@
 // Primary maintainer: He Junjie; interface contributors: Xie Fuxiang.
 // AI-assisted declarations, checked against docs/interfaces.md v1.0.
-// Declarations only: unimplemented modules intentionally have no success stubs.
+// Shared declarations; implementation availability is recorded in docs/interfaces.md.
 #pragma once
 #include "core/packet_types.h"
 #include <array>
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <memory>
 
 namespace flowguard {
 
@@ -64,7 +65,9 @@ public:
     void stop();
     bool tryPop(RawPacket& packet);
     CaptureStatus status() const;
-    // 具体私有成员由实现者补充；不暴露 pcap_t 或内部队列。
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 struct ProtocolField {

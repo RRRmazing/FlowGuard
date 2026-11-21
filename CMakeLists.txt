@@ -23,6 +23,8 @@ function(flowguard_configure_cpp target)
 endfunction()
 
 add_library(flowguard_capture STATIC
+    src/capture/capture_session.cpp
+    src/capture/capture_buffer.h
     src/capture/device_enumerator.cpp
     src/capture/device_enumerator_detail.h
     src/core/module_contracts.h)
@@ -42,8 +44,15 @@ add_executable(flowguard_capture_tests tests/device_enumerator_tests.cpp)
 target_link_libraries(flowguard_capture_tests PRIVATE flowguard_capture)
 flowguard_configure_cpp(flowguard_capture_tests)
 
+add_executable(flowguard_session_tests tests/capture_session_tests.cpp)
+target_link_libraries(flowguard_session_tests PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_session_tests)
+add_executable(flowguard_live_tests tests/capture_live_tests.cpp)
+target_link_libraries(flowguard_live_tests PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_live_tests)
+
 set_target_properties(flowguard_capture flowguard_capture_probe
-    flowguard_contracts_check flowguard_capture_tests PROPERTIES
+    flowguard_contracts_check flowguard_capture_tests flowguard_session_tests flowguard_live_tests PROPERTIES
     AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 
 qt_add_executable(FlowGuard
@@ -61,6 +70,10 @@ set_tests_properties(stage0_smoke PROPERTIES TIMEOUT 15)
 add_test(NAME capture_device_enumerator COMMAND flowguard_capture_tests)
 add_test(NAME capture_probe_help COMMAND flowguard_capture_probe --help)
 add_test(NAME capture_probe_bad_args COMMAND flowguard_capture_probe --not-an-option)
+add_test(NAME capture_session_unit COMMAND flowguard_session_tests)
+add_test(NAME capture_loopback_live COMMAND flowguard_live_tests)
+set_tests_properties(capture_session_unit PROPERTIES TIMEOUT 20)
+set_tests_properties(capture_loopback_live PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77 LABELS "hardware")
 set_tests_properties(capture_probe_bad_args PROPERTIES WILL_FAIL TRUE)
 set_tests_properties(capture_device_enumerator capture_probe_help capture_probe_bad_args
     PROPERTIES TIMEOUT 15)
