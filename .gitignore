@@ -2,7 +2,6 @@
 /third_party/npcap-sdk/
 /third_party/*.zip
 /CMakeUserPresets.json
-/local-env.cmd
 /.vs/
 *.user
 *.pcap

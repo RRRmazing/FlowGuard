@@ -7,9 +7,7 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/windows-msvc",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_PREFIX_PATH": "$env{FLOWGUARD_QT_DIR}",
-        "CMAKE_MAKE_PROGRAM": "$env{FLOWGUARD_NINJA}"
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],

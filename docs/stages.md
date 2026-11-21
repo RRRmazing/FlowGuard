@@ -17,19 +17,19 @@
 
 ## 阶段 0 自动验收 2026年11月21日
 
-- 内层目录建立独立 `main` 本地仓库，无远程配置、无首次提交。
+- 内层目录建立独立 `main` 仓库，阶段 0 初始工程已提交并推送。
 - MSVC 19.51、CMake 4.4.3、Qt 6.11.0 Widgets 配置和 Release 构建通过。
 - 官方 Npcap SDK 1.17 下载并在本地解压，x64 导入库成功链接。
 - CTest `stage0_smoke` 通过：实际 DLL 加载、Qt 窗口显示状态和事件循环检查。
 - Git 忽略规则已验证：构建产物、SDK 和下载压缩包均被忽略。
-- 协作配置调整：个人 Qt/Ninja 路径移至被 Git 忽略的 `local-env.cmd`，仓库提供配置模板和首次接入说明。
+- 构建方式已简化为标准 CMake/CTest 命令；不再维护自定义环境检测、本机配置或构建运行脚本。
 - 未执行采集，没有打开网卡；窗口中文排版待用户目视验收。
 - CMake 提示缺少可选 Vulkan headers；本阶段 Widgets 构建和启动通过。
 - Codex 沙箱内编译探测曾受执行限制，实际成功构建和运行在获准的沙箱外执行。
 
 ## 用户验收
 
-1. VS Code 打开内层目录，在终端执行 `.\scripts\build.cmd`，确认成功。
-2. 执行 `.\scripts\run.cmd`，确认“流量哨兵”窗口、中文及 Npcap 版本文字正常。
-3. 关闭窗口，执行 `.\scripts\test.cmd`，确认 `100% tests passed`。
-4. 将结果反馈当前聊天；确认通过后保存首次提交和 `stage-0` 标签，再进入阶段 1。
+1. 按 README 在 MSVC 开发环境中配置 CMake，再执行 `cmake --build --preset windows-msvc`，确认成功。
+2. 按 README 设置开发运行所需的 DLL 路径，运行 `build/windows-msvc/FlowGuard.exe`，确认窗口、中文及 Npcap 版本文字正常。
+3. 关闭窗口，执行 `ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error`，确认 `100% tests passed`。
+4. 自己和队友的构建、运行结果确认后，记录验收并保存阶段标签，再进入阶段 1。

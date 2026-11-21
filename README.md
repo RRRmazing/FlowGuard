@@ -1,99 +1,108 @@
 # FlowGuard 流量哨兵
 
-计算机网络课程设计。当前完成阶段 0 工程骨架；尚未实现采集、解析、统计和回放。
+计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。当前为阶段 0 工程骨架，尚未实现报文采集、解析、统计与回放。
 
-## 首次配置环境
+## 开发依赖
 
-每位开发者克隆同一份仓库，各自安装工具并配置本机路径，不修改共享源码。
+当前验证的环境为 Windows x64、MSVC、Qt 6.11.0。需要：
 
-1. 使用 Windows x64，安装 Visual Studio C++ Build Tools 的桌面 C++ 工作负载及 Windows SDK。
-2. 安装 Qt 的 **MSVC x64** 开发套件，建议 Qt 6.11.0，须包含 Widgets；当前脚本不支持 MinGW。
-3. 安装 CMake 3.21 或更新版本并添加到 PATH，准备 Ninja（Qt 安装器可提供）。
-4. 从 [Npcap 官网](https://npcap.com/)安装 Npcap 驱动。
-5. 用 VS Code 打开克隆后的仓库根目录，即包含 `CMakeLists.txt` 的目录。在 PowerShell 终端执行：
+- Visual Studio 或 Build Tools 的桌面 C++ 工作负载及 Windows SDK。
+- Qt 的 MSVC x64 套件，包含 Widgets；后续图表阶段需要 Charts。
+- CMake 3.21 或更新版本，以及 Ninja。两者需能从开发终端调用。
+- [Npcap 驱动](https://npcap.com/)和 [Npcap SDK 1.17](https://npcap.com/dist/npcap-sdk-1.17.zip)。
 
-```powershell
-Copy-Item .\local-env.example.cmd .\local-env.cmd
-```
+驱动通过官方安装程序安装。SDK 解压到仓库的 `third_party/npcap-sdk`，使其包含
+`Include/pcap.h` 和 `Lib/x64/wpcap.lib`。SDK 和构建产物不提交 Git。
+也可以在 CMake 配置时通过 `-DNPCAP_SDK_DIR=...` 指定自己的 SDK 位置。
 
-编辑 `local-env.cmd`，取消其中两行 `set` 命令的注释，分别填写本机的 Qt MSVC x64 套件目录、
-`ninja.exe` 完整路径。路径可以包含空格，保留模板中的双引号。
-Qt 套件目录下应能找到 `bin/Qt6Widgets.dll` 和 `lib/Qt6Widgets.lib`。
-也可直接设置 `FLOWGUARD_QT_DIR`、`FLOWGUARD_NINJA` 环境变量；Ninja 未配置时会从 PATH 查找。
+每位开发者自行配置工具位置，共享文件不包含个人安装路径。
+当前预设使用 MSVC x64；MinGW 不是当前已验证的构建方式。
 
-**`local-env.cmd` 被 Git 忽略，每个人维护自己的文件，不会随拉取代码被覆盖。**
-模板不含任何开发者的专属路径。VS Code 的构建、运行、检查任务均读取同一份本机配置。
+## 从源码到程序
 
-首次下载开发 SDK：
+编辑器中的“运行”通常包含构建和启动两个过程。本项目通过 CMake 组织多个源文件和依赖：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-deps.ps1
-```
+1. **配置**：CMake 读取 `CMakeLists.txt`，找到编译器、Qt 和 Npcap SDK，并生成 Ninja 构建规则。
+2. **构建**：Ninja 调用 MSVC 编译各个源文件，再链接成 `FlowGuard.exe`。
+3. **运行**：Windows 启动 exe，同时加载 Qt 和 Npcap 的 DLL。
+4. **测试**：CTest 执行项目已注册的测试，并检查退出结果。
 
-## 构建和运行
+CMake 预设 `CMakePresets.json` 只记录共享构建选项；个人路径通过命令行、编辑器配置，
+或被 Git 忽略的标准 `CMakeUserPresets.json` 提供。项目不要求自定义配置脚本。
 
-在仓库根目录执行：
+## 配置与构建
 
-```powershell
-.\scripts\build.cmd
-.\scripts\run.cmd
-```
+在开始菜单打开 Visual Studio 的 **Developer PowerShell**，确保选择 x64 开发环境。
+这个终端由微软工具提供，用于设置编译器和 Windows SDK 的环境，并非项目自定义脚本。
+进入克隆后的仓库根目录（含 `CMakeLists.txt` 的目录）。也可以从此终端执行 `code .` 打开 VS Code。
 
-第一条配置并编译程序，看到成功链接或 `ninja: no work to do` 即表示构建成功。
-第二条启动窗口，关闭窗口即可结束程序。窗口目前显示阶段 0 状态和 Npcap 版本。
-
-自动启动检查：
+以下是 PowerShell 命令。首次配置时输入自己机器的 Qt MSVC x64 套件目录（包含 bin、lib、plugins），不带额外引号：
 
 ```powershell
-.\scripts\test.cmd
+$qtRoot = Read-Host '请输入本机 Qt MSVC x64 套件目录'
+cmake --preset windows-msvc "-DCMAKE_PREFIX_PATH=$qtRoot"
+cmake --build --preset windows-msvc
 ```
 
-应显示 `100% tests passed`。此检查只加载库和显示窗口，不采集流量。
-构建后可重复运行；修改源码后先重新构建。不要用单文件“运行 C++”按钮构建整个工程。
+Ninja 应位于 PATH；如果没有，可以在配置命令中额外加入 `-DCMAKE_MAKE_PROGRAM=...` 指向 ninja.exe。
+首次配置成功应显示 `Configuring done` 和 `Generating done`。
+构建成功会生成 `build/windows-msvc/FlowGuard.exe`；无改动时显示 `ninja: no work to do`。
+Qt 路径会缓存在本机 build 目录里，通常修改源码后只需再次执行构建命令。
 
-也可以按 **Ctrl+Shift+B** 构建，通过“终端 → 运行任务”选择 `FlowGuard: Run` 或 `FlowGuard: Check`。
-任务配置要求 VS Code 打开的是本仓库根目录。
+不要将单文件“运行 C++”命令用于整个工程，它不会自动处理其他源文件、Qt 和 Npcap 依赖。
 
-## 工具链与依赖
+## 开发运行
 
-- C++17，MSVC x64，Qt 6.11.0 Widgets，CMake，Ninja。
-- `build.cmd` 自动查找已安装的 Visual Studio C++ Build Tools 并加载开发环境。
-- Qt 和 Ninja 路径由本机 `local-env.cmd` 或环境变量提供，共享脚本没有个人路径默认值。
-- 运行脚本临时添加 Qt 和 Npcap DLL 路径，不修改系统 PATH。
-- 开发 SDK 位于 `third_party/npcap-sdk`，没有提交到 Git。
+在同一个 PowerShell 终端中，使用上面的 `$qtRoot`：
 
-SDK 来自 https://npcap.com/dist/npcap-sdk-1.17.zip 。脚本核对阶段 0 下载文件的 SHA256，
-用于确保重复获取相同文件；该摘要不是独立的官方签名认证。驱动需自行通过 Npcap 官方安装程序安装。
-最终交付包还需要 Qt 部署与运行验证，当前开发程序应通过 `run.cmd` 启动。
+```powershell
+$env:PATH = "$qtRoot\bin;$env:SystemRoot\System32\Npcap;$env:PATH"
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
+.\build\windows-msvc\FlowGuard.exe
+```
 
-## 目录
+这里临时告诉 Windows 去哪里寻找 DLL，并告诉 Qt 去哪里找窗口平台插件，设置只影响当前终端及其子进程。
+重新打开终端时，重新设置 `$qtRoot` 和上述运行环境；不需要重新配置 CMake。
+如果缺少 DLL，说明运行依赖未准备好，并不一定是源码编译失败。
+
+阶段 0 窗口应显示项目名称、阶段说明和 Npcap 版本，可以调整大小并正常关闭。
+当前不采集网络流量。
+
+## 测试与验收
+
+完成构建并设置运行环境后执行：
+
+```powershell
+ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
+```
+
+CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出。
+预期结果为 `100% tests passed`。这不能替代人工查看中文显示、窗口操作和退出是否正常。
+队友也应在自己的电脑上配置、构建和运行，确认工程能独立复现。
+
+最终交付前还需要单独部署和验证运行库。Qt 提供 `windeployqt` 工具；
+开发终端可以运行程序，并不代表单独复制一个 exe 就能在另一台电脑运行。
+
+## 项目结构
 
 | 位置 | 内容 |
 | --- | --- |
-| `CMakeLists.txt` | 源文件、Qt 和 Npcap 依赖定义 |
-| `CMakePresets.json` | 构建目录和 Release 配置 |
-| `local-env.example.cmd` | 不含个人路径的本机配置模板 |
-| `local-env.cmd` | 个人配置，不提交 Git |
-| `src/core` | 原始报文和解析记录公共数据结构 |
-| `src/capture` | 采集、线程与有界缓冲，后续实现 |
-| `src/parser` | 协议解析，后续实现 |
-| `src/statistics` | 统计，后续实现 |
-| `src/storage` | PCAP 读写，后续实现 |
-| `src/ui` | 主窗口 |
-| `tests/data` | 可重复测试用的小型报文样本 |
-| `docs` | 阶段记录、接口约定和后续说明 |
-| `build` | 自动生成，可重新构建，不提交 Git |
+| `CMakeLists.txt` | 源码、依赖与测试定义 |
+| `CMakePresets.json` | 共享构建选项 |
+| `src/core` | 原始报文和解析结果数据结构 |
+| `src/capture` | 后续采集、线程与有界缓冲 |
+| `src/parser` | 后续协议解析 |
+| `src/statistics` | 后续统计计算 |
+| `src/storage` | 后续 PCAP 读写 |
+| `src/ui` | 窗口与显示 |
+| `tests/data` | 可重复验证的报文样本 |
+| `docs` | 阶段记录和接口约定 |
+| `build` | 本机生成文件，不提交 Git |
 
-## Git 和阶段验收
+## 协作
 
-本地仓库已初始化，分支为 `main`，暂未配置远程仓库。
-阶段 0 等用户亲自运行验收；确认通过后再做首次提交和阶段标签。
-源码应纳入 Git，编译文件、本地 SDK 和个人抓包文件不应纳入。
-不要伪造作者、测试结果或两人的实际贡献，报告按真实情况填写。
+提交源码、CMake 配置、测试与说明，不提交个人配置、SDK、编译产物和个人抓包数据。
+换电脑时重新构建，不复制 build 目录；更换编译器或 Qt 套件时使用新的构建目录。
+保留各自正常的 Git 作者身份，功能分支通过审查和验收后合并到 main。
 
-换电脑时不要复制 `build` 目录；它包含本机路径，需在新电脑重新构建。
-更换编译器或 Qt 套件时，移走旧 `build` 目录后重新构建。
-提交前检查 `git status` 和暂存差异；Git 作者邮箱属于提交元数据，需要在提交前自行确认，
-如有隐私需要可使用 GitHub 提供的 noreply 邮箱。
-
-阶段记录见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
+阶段指南见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
