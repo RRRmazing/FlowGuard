@@ -1,0 +1,52 @@
+FlowGuard 第一步验收：公共声明与网卡枚举
+日期：2026-11-21（Asia/Shanghai）
+分支：feat/capture；初始共同基线：771d27e。
+公共头文件独立提交：44ecf65。
+
+完成范围
+- 公共声明与 docs/interfaces.md v1.0 的 C++ 声明一致。
+- 原有 RawPacket、PacketRecord 和枚举保持不变。
+- 实现 enumerateDevices：设备 ID、说明、IPv4/IPv6、回环标记。
+- 添加 Qt 无关的 flowguard_capture 静态库、枚举命令行程序。
+- 添加公共头文件编译检查及模拟设备链表的自动测试。
+- 实际抓包、CaptureSession、BPF、线程缓冲等尚未实现。
+
+环境
+Windows x64，MSVC 19.51，CMake 4.3.1-msvc1，Ninja 1.13.2，
+Qt 6.11.0 Widgets，Npcap SDK 1.17，已有 Npcap 运行时。
+全部通过命令行构建和验证；未进行桌面点击或截图。
+
+验证方法
+1. 在 MSVC x64 开发环境中运行标准 CMake 配置与构建：
+   cmake --preset windows-msvc
+   cmake --build --preset windows-msvc
+   （本机已在缓存中配置 Qt、Ninja、SDK 路径；新机器按根 README 配置。）
+2. 准备当前终端的 Qt、Npcap DLL 与 Qt 平台插件路径后运行 CTest：
+   ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
+   本轮回归将 QT_QPA_PLATFORM 临时设为 offscreen，不在桌面弹出 Qt 窗口；
+   该结果验证依赖和事件循环，不替代人工中文显示检查。
+3. 只验证采集测试可使用 -R "^capture_"，无需 Qt DLL 和平台插件。
+4. 设置 Npcap DLL 路径后运行：
+   .\build\windows-msvc\flowguard_capture_probe.exe --list-devices
+
+实际结果
+- 原有 FlowGuard.exe、采集库、CLI、测试程序均构建成功。
+- 公共头文件独立 C++17 编译检查成功。
+- 首轮 stage0_smoke、capture_device_enumerator、capture_probe_help 3/3 通过。
+- 补充 capture_probe_bad_args 后最终 CTest 4/4 通过（0.73 秒）；
+  独立检查错误参数退出码为 2，符合约定。
+- 使用 dumpbin /dependents 检查枚举程序，只链接 wpcap、Winsock、
+  Windows 及 MSVC 运行库，没有 Qt DLL 链接依赖。
+- 本机真实枚举退出码 0，返回 15 个设备，包含 IPv4、IPv6 与回环设备。
+  设备数量随机器变化；未打开网卡或抓取报文。
+- 共享记录不附带本机设备 GUID 或 IP 地址；完整输出只用于本机检查。
+
+测试覆盖
+空列表；枚举失败诊断；错误无文本回退；部分失败链表释放；多设备顺序；
+空说明/无地址；IPv4/IPv6 与 scope ID；回环标记；空/非 IP 地址跳过；
+地址去重；结果字符串自持有；不可选设备跳过；资源只释放一次。
+
+注意
+首次链接因旧的阶段 0 进程占用 FlowGuard.exe 失败，核对其完整路径后
+通过命令行结束该旧进程，重新链接成功。没有其他进程被结束。
+功能代码仅在 feat/capture 提交；main 不做合并。

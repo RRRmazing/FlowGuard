@@ -1,6 +1,8 @@
 # FlowGuard 流量哨兵
 
-计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。当前为阶段 0 工程骨架，尚未实现报文采集、解析、统计与回放。
+计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。阶段 0 工程骨架已建立；
+当前 `feat/capture` 分支增加公共模块声明、网卡枚举与命令行验证程序。
+报文采集、解析、统计与回放仍待实现。
 
 ## 开发依赖
 
@@ -76,9 +78,21 @@ $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
 ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 ```
 
-CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出。
+CTest 当前包含 `stage0_smoke` 和三项 `capture_*` 测试：前者加载实际的
+Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出；后者验证设备信息转换、
+资源释放及命令行参数，不打开网卡抓包。公共头文件还有独立编译检查目标。
 预期结果为 `100% tests passed`。这不能替代人工查看中文显示、窗口操作和退出是否正常。
 队友也应在自己的电脑上配置、构建和运行，确认工程能独立复现。
+
+只验证采集基础而不启动窗口时：
+
+```powershell
+ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-tests=error
+.\build\windows-msvc\flowguard_capture_probe.exe --list-devices
+```
+
+这里的命令行程序仅依赖 Npcap 和系统库，不依赖 Qt DLL；输出网卡设备标识、
+说明、IPv4/IPv6 地址和回环标记。详细行为见 [采集模块说明](src/capture/README.md)。
 
 最终交付前还需要单独部署和验证运行库。Qt 提供 `windeployqt` 工具；
 开发终端可以运行程序，并不代表单独复制一个 exe 就能在另一台电脑运行。
@@ -89,8 +103,8 @@ CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口�
 | --- | --- |
 | `CMakeLists.txt` | 源码、依赖与测试定义 |
 | `CMakePresets.json` | 共享构建选项 |
-| `src/core` | 原始报文和解析结果数据结构 |
-| `src/capture` | 后续采集、线程与有界缓冲 |
+| `src/core` | 原始报文、解析结果及公共模块接口声明 |
+| `src/capture` | 已实现枚举与命令行验证；后续采集、线程与有界缓冲 |
 | `src/parser` | 后续协议解析 |
 | `src/statistics` | 后续统计计算 |
 | `src/storage` | 后续 PCAP 读写 |
