@@ -1,5 +1,6 @@
 // Primary author: Xie Fuxiang. AI-assisted tests, pending user review.
 #include "monitoring/run_recorder.h"
+#include "ui/device_selector.h"
 #include "ui/packet_model.h"
 #include <QApplication>
 #include <QFile>
@@ -21,6 +22,39 @@ int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     using namespace flowguard;
+    CaptureDevice wifi;
+    wifi.id = "wifi-id";
+    wifi.description = "Very long Wi-Fi hardware description with multiple addresses";
+    wifi.addresses = {"192.0.2.10", "2001:db8::10"};
+    const auto wifiChoice = describeDevice(wifi, {"WLAN", QNetworkInterface::Wifi, true, true, true});
+    check(wifiChoice.title.contains("WLAN") && wifiChoice.title.contains(QStringLiteral("已连接")) &&
+              wifiChoice.priority == 0,
+          "connected Wi-Fi is identifiable and preferred");
+    CaptureDevice ethernet;
+    ethernet.id = "ethernet-id";
+    ethernet.description = "Ethernet controller";
+    const auto wiredChoice =
+        describeDevice(ethernet, {QStringLiteral("以太网"), QNetworkInterface::Ethernet, true, true, false});
+    check(wiredChoice.title.contains(QStringLiteral("有线以太网")) &&
+              wiredChoice.title.contains(QStringLiteral("未连接")),
+          "disconnected Ethernet remains listed");
+    CaptureDevice virtualDevice;
+    virtualDevice.id = "virtual-id";
+    virtualDevice.description = "VirtualBox Host-Only Ethernet Adapter";
+    const auto virtualChoice =
+        describeDevice(virtualDevice, {"Host-only", QNetworkInterface::Ethernet, true, true, true});
+    check(virtualChoice.priority > wifiChoice.priority && virtualChoice.title.contains(QStringLiteral("虚拟")),
+          "virtual Ethernet not preferred over active physical interface");
+    DeviceSelector selector;
+    selector.setChoices({wifiChoice, wiredChoice, virtualChoice});
+    check(selector.count() == 3 && selector.currentData().toString() == "wifi-id",
+          "selector preserves every capturable ID");
+    check(selector.selectedDetails().contains("2001:db8::10") &&
+              selector.selectedDetails().contains(wifiChoice.description),
+          "full hardware and IPv6 details retained");
+    selector.setCurrentIndex(1);
+    selector.setChoices({virtualChoice, wifiChoice, wiredChoice});
+    check(selector.currentData().toString() == "ethernet-id", "refresh preserves chosen ID after reordering");
     PacketRecord r;
     r.network = NetworkProtocol::IPv6;
     r.transport = TransportProtocol::Udp;
@@ -54,7 +88,7 @@ int main(int argc, char **argv)
     }
     model.append(std::move(packets));
     check(model.retained() == 2000 && model.rowCount() == 2000, "bounded model");
-    check(model.evicted()==500,"list evictions separate from backend display drops");
+    check(model.evicted() == 500, "list evictions separate from backend display drops");
     check(model.packet(0)->record.sequence == 501, "oldest removed");
     DisplayFilter filter;
     filter.protocol = ProtocolFilter::Tcp;

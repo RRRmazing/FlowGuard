@@ -173,10 +173,10 @@ else()
 endif()
 configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 add_library(flowguard_ui_support STATIC
-    src/ui/display_filter.cpp src/ui/packet_model.cpp
+    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp
     src/monitoring/resource_sampler.cpp src/monitoring/run_recorder.cpp)
 target_include_directories(flowguard_ui_support PUBLIC src PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(flowguard_ui_support PUBLIC flowguard_processing Qt6::Widgets Qt6::Network psapi)
+target_link_libraries(flowguard_ui_support PUBLIC flowguard_processing Qt6::Widgets Qt6::Network psapi iphlpapi)
 flowguard_configure_cpp(flowguard_ui_support)
 target_sources(FlowGuard PRIVATE src/ui/chart_panel.cpp)
 target_link_libraries(FlowGuard PRIVATE flowguard_ui_support Qt6::Charts)

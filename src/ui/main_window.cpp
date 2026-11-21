@@ -2,6 +2,7 @@
 #include "ui/main_window.h"
 #include "monitoring/run_recorder.h"
 #include "ui/chart_panel.h"
+#include "ui/device_selector.h"
 #include "ui/packet_model.h"
 #include <QDesktopServices>
 #include <QElapsedTimer>
@@ -88,7 +89,7 @@ struct MainWindow::Impl
     std::atomic<double> guiDelay{0};
     std::atomic<std::uint64_t> guiSession{0}, listEvicted{0};
     QElapsedTimer uptime, guiTick, sessionClock;
-    QDateTime started = QDateTime::currentDateTime(), sessionStarted;
+    QDateTime sessionStarted;
     qint64 sessionElapsed = 0;
     ProcessingSnapshot snapshot;
     ResourceSample resource;
@@ -96,18 +97,22 @@ struct MainWindow::Impl
     bool busy = false, closing = false, allowClose = false;
     QString recordPath, recordError, controlError, lastState, lastSavingError, lastSourceError;
     QTimer *poll, *second;
-    QComboBox *devices = nullptr, *protocol = nullptr;
+    DeviceSelector *devices = nullptr;
+    QComboBox *protocol = nullptr;
     QLineEdit *bpf = nullptr, *ip = nullptr, *port = nullptr;
     QCheckBox *promiscuous = nullptr, *follow = nullptr;
     QSpinBox *snaplen = nullptr;
+    QWidget *snapshotControl = nullptr;
+    QToolButton *snapshotUp = nullptr, *snapshotDown = nullptr;
     QPushButton *start = nullptr, *stop = nullptr, *open = nullptr, *pause = nullptr, *save = nullptr,
                 *refresh = nullptr;
-    QLabel *state = nullptr, *sessionTime = nullptr, *error = nullptr, *count = nullptr, *status = nullptr,
-           *resourcesText = nullptr, *recordLabel = nullptr, *sourceLabel = nullptr;
+    QLabel *state = nullptr, *sessionTime = nullptr, *error = nullptr, *count = nullptr, *resourcesText = nullptr,
+           *recordLabel = nullptr;
     QAction *pauseAction = nullptr;
-    std::array<QLabel *, 5> resourceTimes{};
+    std::array<QLabel *, 3> timeBar{};
     std::array<QLabel *, 4> resourceMetrics{};
     QString sourceDescription;
+    QString recordLocationDescription = QStringLiteral("正在准备运行记录");
     std::array<QLabel *, 4> metrics{};
     PacketModel *model = nullptr;
     QTableView *table = nullptr;
@@ -177,8 +182,10 @@ struct MainWindow::Impl
     void updateControls()
     {
         const bool idle = !active() && !busy && !closing;
-        for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snaplen})
+        for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snapshotControl})
             widget->setEnabled(idle);
+        snapshotUp->setEnabled(idle && snaplen->value() < snaplen->maximum());
+        snapshotDown->setEnabled(idle && snaplen->value() > snaplen->minimum());
         start->setEnabled(idle && devices->count() > 0);
         open->setEnabled(idle);
         stop->setEnabled(active() && !busy && !closing);
@@ -190,6 +197,7 @@ struct MainWindow::Impl
         save->setEnabled(active() && !busy && !closing);
         save->setText(snapshot.savingActive || snapshot.savingRequested ? QStringLiteral("结束保存")
                                                                         : QStringLiteral("保存后续报文"));
+        state->setToolTip(sourceDescription);
         state->setText(closing ? QStringLiteral("正在退出…")
                        : busy  ? QStringLiteral("处理中…")
                                : stateName(snapshot.state));
@@ -209,21 +217,12 @@ struct MainWindow::Impl
     {
         command("enumerate", [this] {
             const auto result = enumerateDevices();
+            const auto choices = captureDeviceChoices(result.devices);
             QMetaObject::invokeMethod(
                 w,
-                [this, result] {
-                    const auto selected = devices->currentData();
-                    devices->clear();
-                    for (const auto &dev : result.devices)
-                    {
-                        QStringList addresses;
-                        for (const auto &a : dev.addresses)
-                            addresses << txt(a);
-                        devices->addItem(txt(dev.description) + " · " + addresses.join(", "), txt(dev.id));
-                    }
-                    int idx = devices->findData(selected);
-                    if (idx >= 0)
-                        devices->setCurrentIndex(idx);
+                [this, result, choices] {
+                    devices->setChoices(choices);
+                    devices->setToolTip(devices->currentData(Qt::ToolTipRole).toString());
                     if (devices->count() == 0)
                         controlError = QStringLiteral("未发现网卡，请检查 Npcap 后刷新。");
                 },
@@ -326,15 +325,20 @@ struct MainWindow::Impl
                  std::array<std::pair<const char *, int>, 4>{{{"SYN", 2}, {"ACK", 16}, {"FIN", 1}, {"RST", 4}}})
                 item(flag.first, QString::number((*r.tcpFlags & flag.second) ? 1 : 0));
         required->setExpanded(true);
-        summary->setText(
-            QStringLiteral("%1 · %2\n\n时间：%3\n源：%4\n目的：%5\n原始长度：%6 B\n捕获长度：%7 "
-                           "B\n\n%8\n%9\n\n仅展示解析字段；原始报文通过 PCAP 保存。")
+        QStringList sections{
+            QStringLiteral("%1 · %2\n\n时间：%3\n源：%4\n目的：%5\n原始长度：%6 B\n捕获长度：%7 B")
                 .arg(protocolName(r), parseName(r.status),
                      QDateTime::fromMSecsSinceEpoch(
                          std::chrono::duration_cast<std::chrono::milliseconds>(r.timestamp.time_since_epoch()).count())
                          .toString(Qt::ISODateWithMs),
-                     txt(r.sourceIp), txt(r.destinationIp), num(r.originalLength), num(r.capturedLength),
-                     txt(r.summary), txt(r.diagnostic)));
+                     txt(r.sourceIp), txt(r.destinationIp), num(r.originalLength), num(r.capturedLength))};
+        // Addresses are already shown above; keep only summaries with additional information.
+        if (!r.summary.empty() && r.summary != r.sourceIp + " -> " + r.destinationIp)
+            sections << txt(r.summary);
+        if (!r.diagnostic.empty())
+            sections << txt(r.diagnostic);
+        sections << QStringLiteral("仅展示解析字段；原始报文通过 PCAP 保存。");
+        summary->setText(sections.join("\n\n"));
     }
     void tick()
     {
@@ -382,14 +386,15 @@ struct MainWindow::Impl
         }
         listEvicted.store(model->evicted());
         guiSession.store(snapshot.sessionId);
-        count->setText(QStringLiteral("保留 %1 条 · 匹配 %2 条 · 总计 %3 包 · 历史淘汰 %4；筛选不影响统计/保存")
-                           .arg(model->retained()).arg(model->rowCount())
-                           .arg(snapshot.statistics.totalPackets).arg(model->evicted()));
+        count->setText(QStringLiteral("会话累计 %1 包  |  列表保留最近 %2 条（最多 2000）  |  当前筛选显示 %3 条")
+                           .arg(snapshot.statistics.totalPackets)
+                           .arg(model->retained())
+                           .arg(model->rowCount()));
         metrics[0]->setText(num(snapshot.statistics.totalPackets));
         metrics[1]->setText(mib(snapshot.statistics.totalBytes));
         metrics[2]->setText(QString::number(snapshot.rate.packetsPerSecond, 'f', 1) + " pkt/s");
         metrics[3]->setText(QString::number(snapshot.rate.bytesPerSecond / 1024, 'f', 1) + " KiB/s");
-        sessionTime->setText(QStringLiteral("会话时长 ") + duration(sessionElapsed / 1000));
+        updateTimeBar();
         updateControls();
     }
     void logStart()
@@ -398,13 +403,16 @@ struct MainWindow::Impl
             worker,
             [this] {
                 QString root = qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
+                const bool customRoot = !root.isEmpty();
                 if (root.isEmpty())
                     root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/runs";
                 recorder.open(root);
                 QMetaObject::invokeMethod(
                     w,
-                    [this, path = recorder.directory(), err = recorder.error()] {
+                    [this, path = recorder.directory(), err = recorder.error(), customRoot] {
                         recordPath = path;
+                        recordLocationDescription = customRoot ? QStringLiteral("指定的日志目录")
+                                                               : QStringLiteral("当前用户的应用数据目录（自动创建）");
                         recordError = err;
                     },
                     Qt::QueuedConnection);
@@ -452,18 +460,23 @@ struct MainWindow::Impl
             },
             Qt::QueuedConnection);
     }
+    void updateTimeBar()
+    {
+        const bool file = snapshot.source == ProcessingSource::File;
+        timeBar[0]->setText(QStringLiteral("当前时间：") +
+                            QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+        timeBar[1]->setText(
+            (file ? QStringLiteral("本次文件处理开始：") : QStringLiteral("本次采集开始：")) +
+            (sessionStarted.isValid() ? sessionStarted.toString("yyyy-MM-dd HH:mm:ss") : QStringLiteral("—")));
+        timeBar[2]->setText((file ? QStringLiteral("本次文件处理时长：") : QStringLiteral("本次采集时长：")) +
+                            (sessionStarted.isValid() ? duration(sessionElapsed / 1000) : QStringLiteral("—")));
+    }
     void updateSecond()
     {
         if (pages->currentIndex() == 1)
             charts->refresh(snapshot);
         auto opt = [](const auto &n) { return n ? QString::number(*n) : QStringLiteral("不可用"); };
-        const QStringList timeValues{
-            started.toString("yyyy-MM-dd HH:mm:ss"), QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"),
-            duration(uptime.elapsed() / 1000),
-            sessionStarted.isValid() ? sessionStarted.toString("yyyy-MM-dd HH:mm:ss") : QStringLiteral("—"),
-            duration(sessionElapsed / 1000)};
-        for (int i = 0; i < 5; ++i)
-            resourceTimes[i]->setText(timeValues[i]);
+        updateTimeBar();
         resourceMetrics[0]->setText(resource.cpuPercent ? QString::number(*resource.cpuPercent, 'f', 2) + " %"
                                                         : QStringLiteral("不可用"));
         resourceMetrics[1]->setText(resource.workingSetBytes ? mib(*resource.workingSetBytes)
@@ -473,17 +486,23 @@ struct MainWindow::Impl
         resourceMetrics[3]->setText(resource.processWriteBytes ? mib(*resource.processWriteBytes)
                                                                : QStringLiteral("不可用"));
         resourcesText->setText(
-            QStringLiteral(
-                "驱动接收 %1 / 驱动丢弃 %2 / 接口丢弃 %3\n队列 %4 包 / %5 B / 采集队列丢弃 %6\n展示缓冲丢弃 %7 "
-                "/ 已保存 %8 包\nCPU 占整机能力；I/O 是进程累计读写量，不是物理磁盘吞吐。")
+            QStringLiteral("<table cellspacing='0' cellpadding='0'>"
+                           "<tr><td style='padding-right:28px'>驱动接收 %1 包</td>"
+                           "<td style='padding-right:28px'>驱动丢弃 %2 包</td><td>接口丢弃 %3 包</td></tr>"
+                           "<tr><td>队列 %4 包</td><td>队列大小 %5 B</td><td>采集队列丢弃 %6 包</td></tr>"
+                           "<tr><td>展示缓冲丢弃 %7 包</td><td>已保存 %8 包</td></tr></table>"
+                           "CPU 占整机能力；I/O 是进程累计读写量，不是物理磁盘吞吐。")
                 .arg(opt(snapshot.capture.driverReceived), opt(snapshot.capture.driverDropped),
                      opt(snapshot.capture.interfaceDropped), num(snapshot.capture.queuedPackets),
                      num(snapshot.capture.queuedBytes), num(snapshot.capture.queueDroppedPackets),
                      num(snapshot.displayDroppedPackets), num(snapshot.savedPackets)));
-        recordLabel->setText(QStringLiteral("%1\n%2\n屏幕最多 3600 点；完整日志持续写盘。过旧离线时间桶 %3 包")
-                                 .arg(recordError.isEmpty() ? QStringLiteral("资源日志记录中")
-                                                            : QStringLiteral("日志异常：") + recordError,
-                                      recordPath, num(snapshot.lateHistoryPackets)));
+        const QString saving = snapshot.savingActive      ? QStringLiteral("保存中")
+                               : snapshot.savingRequested ? QStringLiteral("等待首包/准备保存")
+                                                          : QStringLiteral("未保存");
+        recordLabel->setText(
+            QStringLiteral("报文保存状态：%1\n屏幕最多 3600 点；完整日志持续写盘。过旧离线时间桶 %2 包")
+                .arg(saving, num(snapshot.lateHistoryPackets)));
+        recordLabel->setToolTip(recordPath);
         QList<QPointF> cpu, memory;
         for (const auto &p : resourceHistory)
         {
@@ -499,17 +518,11 @@ struct MainWindow::Impl
                 v->setChart(c);
                 delete old;
             };
-            replace(cpuView,
-                    lineChart(QStringLiteral("进程 CPU"), cpu, QStringLiteral("运行秒"), "%", QColor("#07968e"), true));
-            replace(memoryView, lineChart(QStringLiteral("工作集内存"), memory, QStringLiteral("运行秒"), "MiB",
+            replace(cpuView, lineChart(QStringLiteral("CPU 占用"), cpu, QStringLiteral("记录经过秒"), "%",
+                                       QColor("#07968e"), true));
+            replace(memoryView, lineChart(QStringLiteral("内存占用"), memory, QStringLiteral("记录经过秒"), "MiB",
                                           QColor("#4285ed")));
         }
-        const QString saving = snapshot.savingActive      ? QStringLiteral("保存中")
-                               : snapshot.savingRequested ? QStringLiteral("等待首包/准备保存")
-                                                          : QStringLiteral("未保存");
-        status->setText(QStringLiteral("采集队列丢弃 %1 | 展示缓冲丢弃 %2 | %3 · 已保存 %4 包 | 软件连续运行 %5")
-                            .arg(num(snapshot.capture.queueDroppedPackets), num(snapshot.displayDroppedPackets), saving,
-                                 num(snapshot.savedPackets), duration(uptime.elapsed() / 1000)));
         updateControls();
     }
 };
@@ -523,15 +536,19 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
         "QMainWindow,QWidget{background:#f4f7fb;color:#172639;font-family:'Microsoft YaHei UI';font-size:10pt;} "
         "QToolBar{spacing:8px;padding:8px;border-bottom:1px solid #d5dfea;} QPushButton{background:white;border:1px "
         "solid #cad6e3;border-radius:5px;padding:7px 12px;} QPushButton:hover{background:#e0f2f1;} "
-        "QPushButton:disabled{color:#9da7b3;background:#edf0f4;} QPushButton#primary{background:#087f83;color:white;} "
+        "QPushButton:disabled{color:#9da7b3;background:#edf0f4;} "
+        "QPushButton#primary:enabled{background:#087f83;color:white;} "
+        "QPushButton#primary:disabled{background:#e1e6ec;color:#8a95a3;border:1px solid #cad6e3;} "
         "QLabel#metric{font-size:19pt;font-weight:600;color:#123348;} "
         "QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{background:white;border:1px solid "
         "#cad6e3;border-radius:4px;padding:5px;} "
+        "QSpinBox:disabled,QDoubleSpinBox:disabled,QComboBox:disabled,QLineEdit:disabled{color:#929daa;background:#"
+        "edf0f4;} QCheckBox:disabled{color:#929daa;} "
         "QTableView,QTreeWidget{background:white;alternate-background-color:#f0f5fa;border:1px solid "
         "#cad6e3;selection-background-color:#c6e3fa;selection-color:#102a43;} "
         "QHeaderView::section{background:#eaf0f7;padding:6px;border:0;border-bottom:1px solid #cad6e3;} "
         "QListWidget{border:0;background:#edf4f8;} QListWidget::item{padding:16px 10px;} "
-        "QListWidget::item:selected{background:#d2eeeb;color:#087f83;} QStatusBar{border-top:1px solid #cad6e3;}");
+        "QListWidget::item:selected{background:#d2eeeb;color:#087f83;}");
     auto *file = menuBar()->addMenu(QStringLiteral("文件"));
     auto *fileAction = file->addAction(QStringLiteral("打开 PCAP…"));
     fileAction->setShortcut(QKeySequence::Open);
@@ -546,16 +563,16 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     });
     auto *toolbar = addToolBar(QStringLiteral("采集与文件"));
     toolbar->setMovable(false);
-    d->devices = new QComboBox;
-    d->devices->setMinimumWidth(210);
-    d->devices->setMaximumWidth(320);
+    d->devices = new DeviceSelector;
     toolbar->addWidget(d->devices);
     auto button = [toolbar](const QString &label) {
         auto *b = new QPushButton(label);
         toolbar->addWidget(b);
         return b;
     };
-    d->refresh = button(QStringLiteral("刷新"));
+    d->refresh = button(QStringLiteral("刷新网卡"));
+    d->refresh->setToolTip(
+        QStringLiteral("重新读取网卡列表、IP 和连接状态，不清空报文及统计。插拔网线或启停 VPN 后可刷新；采集中锁定。"));
     d->start = button(QStringLiteral("开始采集"));
     d->start->setObjectName("primary");
     d->stop = button(QStringLiteral("停止"));
@@ -565,8 +582,6 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->save = button(QStringLiteral("保存后续报文"));
     d->state = new QLabel;
     toolbar->addWidget(d->state);
-    d->sessionTime = new QLabel;
-    toolbar->addWidget(d->sessionTime);
     auto *central = new QWidget;
     setCentralWidget(central);
     auto *outer = new QVBoxLayout(central);
@@ -579,12 +594,44 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     capture->addWidget(d->promiscuous);
     capture->addWidget(new QLabel(QStringLiteral("截取长度")));
     d->snaplen = new QSpinBox;
+    d->snaplen->setObjectName("snapshotLength");
+    d->snaplen->setToolTip(
+        QStringLiteral("每个报文最多截取的字节数。仅开始采集前可修改，采集中锁定；默认 65535 字节。"));
     d->snaplen->setRange(1, 16 * 1024 * 1024);
     d->snaplen->setValue(65535);
-    capture->addWidget(d->snaplen);
+    // Separate real button widgets avoid platform-style arrow/edit hit-region mismatches.
+    d->snaplen->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    d->snaplen->setFixedWidth(100);
+    d->snapshotControl = new QWidget;
+    auto *lengthLayout = new QHBoxLayout(d->snapshotControl);
+    lengthLayout->setContentsMargins(0, 0, 0, 0);
+    lengthLayout->setSpacing(0);
+    lengthLayout->addWidget(d->snaplen);
+    d->snapshotUp = new QToolButton;
+    d->snapshotDown = new QToolButton;
+    d->snapshotUp->setObjectName("snapshotIncrease");
+    d->snapshotDown->setObjectName("snapshotDecrease");
+    d->snapshotUp->setText(QStringLiteral("▲"));
+    d->snapshotDown->setText(QStringLiteral("▼"));
+    d->snapshotUp->setToolTip(QStringLiteral("增加截取长度"));
+    d->snapshotDown->setToolTip(QStringLiteral("减少截取长度"));
+    for (auto *step : {d->snapshotUp, d->snapshotDown})
+    {
+        step->setFixedSize(28, 32);
+        step->setCursor(Qt::ArrowCursor);
+        step->setAutoRepeat(true);
+        step->setStyleSheet(
+            "QToolButton{background:white;border:1px solid #cad6e3;color:#172639;} "
+            "QToolButton:hover{background:#e0f2f1;} QToolButton:disabled{background:#edf0f4;color:#9da7b3;}");
+        lengthLayout->addWidget(step);
+    }
+    connect(d->snapshotUp, &QToolButton::clicked, d->snaplen, &QSpinBox::stepUp);
+    connect(d->snapshotDown, &QToolButton::clicked, d->snaplen, &QSpinBox::stepDown);
+    connect(d->snaplen, &QSpinBox::valueChanged, this, [this] { d->updateControls(); });
+    capture->addWidget(d->snapshotControl);
     outer->addLayout(capture);
-    d->sourceLabel = new QLabel(QStringLiteral("来源：未开始会话"));
-    outer->addWidget(d->sourceLabel);
+    connect(d->devices, &QComboBox::currentIndexChanged, this,
+            [this] { d->devices->setToolTip(d->devices->currentData(Qt::ToolTipRole).toString()); });
     d->error = new QLabel;
     d->error->setWordWrap(true);
     d->error->setStyleSheet("color:#9b361f;background:#fff0db;padding:8px;");
@@ -652,6 +699,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->tree->setColumnWidth(0, 220);
     details->addWidget(d->tree);
     d->summary = new QLabel;
+    d->summary->setObjectName("packetSummary");
     d->summary->setWordWrap(true);
     d->summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
     auto *summaryScroll = new QScrollArea;
@@ -669,6 +717,10 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     layout->addWidget(split, 1);
     auto *below = new QHBoxLayout;
     d->count = new QLabel;
+    d->count->setWordWrap(true);
+    d->count->setToolTip(
+        QStringLiteral("会话累计是后台处理的全部报文；列表只缓存最近 2000 "
+                       "条，筛选显示数仅针对这些缓存记录。较旧记录离开列表不会改变统计，也不影响已开启的 PCAP 保存。"));
     below->addWidget(d->count, 1);
     d->follow = new QCheckBox(QStringLiteral("自动滚动"));
     d->follow->setChecked(true);
@@ -682,32 +734,25 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->pages->addWidget(chartScroll);
     auto *res = new QWidget;
     auto *resLayout = new QVBoxLayout(res);
-    auto *heading = new QLabel(QStringLiteral("资源监控 · 软件进程与完整时段记录"));
+    auto *heading = new QLabel(QStringLiteral("资源监控"));
     heading->setObjectName("metric");
     resLayout->addWidget(heading);
-    auto *times = new QHBoxLayout;
-    const QStringList timeTitles{QStringLiteral("软件启动（本地时间）"), QStringLiteral("当前时间（本地时间）"),
-                                 QStringLiteral("软件连续运行"), QStringLiteral("会话开始"),
-                                 QStringLiteral("会话时长")};
-    for (int i = 0; i < 5; ++i)
-    {
-        auto *card = new QVBoxLayout;
-        card->addWidget(new QLabel(timeTitles[i]));
-        d->resourceTimes[i] = new QLabel("—");
-        d->resourceTimes[i]->setWordWrap(true);
-        card->addWidget(d->resourceTimes[i]);
-        times->addLayout(card, 1);
-    }
-    resLayout->addLayout(times);
     auto *resMetrics = new QHBoxLayout;
-    const QStringList resTitles{QStringLiteral("CPU（占整机）"), QStringLiteral("工作集内存"),
-                                QStringLiteral("累计进程读取"), QStringLiteral("累计进程写入")};
+    const QStringList resTitles{QStringLiteral("CPU 占用"), QStringLiteral("内存占用"), QStringLiteral("累计读取"),
+                                QStringLiteral("累计写入")};
+    const QStringList resHints{QStringLiteral("本程序占整机处理能力的比例，不是所有程序的 CPU 使用率。"),
+                               QStringLiteral("本程序当前使用的物理内存，技术名称为工作集。"),
+                               QStringLiteral("本程序自启动以来累计的进程读取量，不等于抓包流量。"),
+                               QStringLiteral("本程序自启动以来累计的进程写入量，不等于 PCAP 文件大小。")};
     for (int i = 0; i < 4; ++i)
     {
         auto *card = new QVBoxLayout;
-        card->addWidget(new QLabel(resTitles[i]));
+        auto *title = new QLabel(resTitles[i]);
+        title->setToolTip(resHints[i]);
+        card->addWidget(title);
         d->resourceMetrics[i] = new QLabel("—");
         d->resourceMetrics[i]->setObjectName("metric");
+        d->resourceMetrics[i]->setToolTip(resHints[i]);
         card->addWidget(d->resourceMetrics[i]);
         resMetrics->addLayout(card, 1);
     }
@@ -724,18 +769,30 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
         view->setRenderHint(QPainter::Antialiasing);
         plots->addWidget(view);
     }
-    resLayout->addLayout(plots);
+    resLayout->addLayout(plots, 1);
     d->recordLabel = new QLabel;
     d->recordLabel->setWordWrap(true);
     resLayout->addWidget(d->recordLabel);
     auto *folder = new QPushButton(QStringLiteral("打开运行日志目录"));
+    folder->setToolTip(
+        QStringLiteral("打开当前电脑上本次运行的日志目录。每位用户使用自己的存储位置，不依赖开发者用户名。"));
     resLayout->addWidget(folder);
     auto *resScroll = new QScrollArea;
     resScroll->setWidgetResizable(true);
     resScroll->setWidget(res);
     d->pages->addWidget(resScroll);
-    d->status = new QLabel;
-    statusBar()->addWidget(d->status, 1);
+    auto *bottom = statusBar();
+    bottom->setSizeGripEnabled(false);
+    bottom->setStyleSheet("QStatusBar{border-top:1px solid #cad6e3;background:#edf3f8;} QStatusBar::item{border:0;} "
+                          "QLabel{padding:5px 8px;background:transparent;}");
+    for (int i = 0; i < 3; ++i)
+    {
+        d->timeBar[i] = new QLabel;
+        d->timeBar[i]->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        bottom->addWidget(d->timeBar[i], 1);
+    }
+    d->sessionTime = d->timeBar[2];
+    d->sessionTime->setObjectName("sessionDuration");
     connect(nav, &QListWidget::currentRowChanged, this, [this](int index) {
         d->pages->setCurrentIndex(index);
         d->updateSecond();
@@ -818,7 +875,6 @@ void MainWindow::openFile(const QString &path, bool paced, double speed)
     options.replaySpeed = speed;
     d->sourceDescription = QStringLiteral("文件：") + path +
                            (paced ? QStringLiteral(" · 按捕获时间回放 %1×").arg(speed) : QStringLiteral(" · 快速导入"));
-    d->sourceLabel->setText(d->sourceDescription);
     d->command(
         "start_file",
         [this, path, options] { return d->backend.startFile(std::filesystem::path(path.toStdWString()), options); },
@@ -837,8 +893,10 @@ void MainWindow::startDevice(const QString &id, const QString &bpf, const QStrin
     options.bpfExpression = bpf.toStdString();
     options.promiscuous = d->promiscuous->isChecked();
     options.snapshotLength = std::uint32_t(d->snaplen->value());
-    d->sourceDescription = QStringLiteral("实时采集：") + id;
-    d->sourceLabel->setText(d->sourceDescription);
+    const int selected = d->devices->findData(id);
+    if (selected >= 0)
+        d->devices->setCurrentIndex(selected);
+    d->sourceDescription = QStringLiteral("实时采集：") + (selected >= 0 ? d->devices->itemText(selected) : id);
     ProcessingOptions processing;
     if (!initialSavePath.isEmpty())
         processing.savePath = std::filesystem::path(initialSavePath.toStdWString());
