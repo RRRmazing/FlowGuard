@@ -1,0 +1,106 @@
+# 第三阶段 Qt 接入：实现与验收
+
+负责人：谢福祥。AI 辅助实现，待负责人审阅、操作和讲解。分支 `feat/stage3-qt-ui`，基线 `b6d1aed`。
+本文覆盖 Qt 与记录/分析能力，不代表已完成正式 24 小时运行。
+
+## 已接入的软件功能
+
+- 报文工作台：网卡枚举、BPF、混杂模式、截取长度、开始/停止、有界报文列表、自动滚动和字段详情。
+- 文件：经典 PCAP 快速导入、按捕获时间 0.1–100 倍回放、暂停/继续/停止；实时和文件互斥。
+- 保存：启用后保存后续原始报文，不导出历史列表；状态确认、保存错误提示、默认 1 GiB 上限，已有文件不覆盖。
+- 显示筛选：协议、完整规范化 IP、源或目的端口，条件按 AND 组合；非法输入保留旧条件，统计和保存不变。
+- 课程要求图表：长度频次折线、三区间柱状、网络分类柱状、网络占比饼图、TCP/UDP/ARP 柱状、DNS 区间占比；另有包速率和字节速率。
+- 资源页：软件与会话计时分别显示，CPU/内存/I/O、队列/丢弃/保存指标；Windows 进程资源实际采样，未知值不伪造为零。
+- Qt 图标资源与 Windows EXE 多尺寸图标。布局保持设计稿的浅色、青绿色风格，采用实际可缩放控件。
+
+源码关系：`main_window.cpp` 组织控件与串行控制请求；`packet_model.cpp` 管理最近 2000 条显示历史；`chart_panel.cpp` 读取统计快照绘图；`resource_sampler.cpp` 调用 Windows 进程 API；`run_recorder.cpp` 在控制线程写证据。
+开始/停止/文件/保存调用都排到控制线程；GUI 每 100 ms 获取最多 500 条；资源每秒记录。隐藏图表不逐秒重建，切页时立即刷新。
+
+## 构建与自动检查
+
+CMake 读取源码、Qt/Npcap 依赖生成构建规则；MSVC 编译并链接生成 EXE。程序启动时仍需 Qt/Npcap DLL；不是把单个 C++ 文件直接运行。
+沿用根 README 的 MSVC Developer PowerShell、Qt 路径和 DLL 环境设置。新增依赖为同一 Qt MSVC 套件的 Charts、Network、Test（Test 用于交互测试）。
+
+```powershell
+cmake --preset windows-msvc "-DCMAKE_PREFIX_PATH=$qtRoot" "-DNPCAP_SDK_DIR=$npcapSdkRoot"
+cmake --build --preset windows-msvc
+ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
+```
+
+本机工具和 SDK 的路径只存 CMake 缓存，不能提交私人配置。
+目录整理后已恢复单一 `FlowGuard/` 工作目录，当前直接使用本仓库的 SDK 和构建目录。原 worktree 的构建及测试产物保留在 `build/stage3-worktree-archive/`，其中 CMake 缓存含旧路径，只作历史归档；实际开发使用 `build/windows-msvc/`。
+现有和新增测试共 16 项。`stage3_support` 检查资源采样、筛选、有界列表、日志与写入目录失败；`stage3_gui_file` 通过实际 Qt 事件循环导入固定文件并截图；`stage3_gui_integration` 检查暂停恢复、来源互斥、字段/筛选及真实自产回环流量；`stage3_run_analysis` 检查非等间隔加权、缺失样本及会话重置。
+离屏平台可检查逻辑，但 Windows 离屏字体可能是方框；中文排版必须查看原生窗口。
+
+## 用户亲自验收
+
+在本分支仓库目录的 PowerShell 中，构建完成后按标准开发方式启动。Qt DLL 与平台插件是 EXE 的运行依赖，下面只为当前终端设置查找位置，不改系统配置：
+
+```powershell
+$qtRoot = Read-Host '请输入本机 Qt MSVC x64 套件目录'
+$env:PATH = "$qtRoot\bin;$env:SystemRoot\System32\Npcap;$env:PATH"
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
+.\build\windows-msvc\FlowGuard.exe
+```
+
+本机已经在此目录完成构建；切换源码后使用标准 `cmake --build --preset windows-msvc` 重新构建。新电脑首次配置参照 README，不复制本机 build。
+
+1. 运行 `build/windows-msvc/FlowGuard.exe`，观察中文、缩放、分隔条和图标。
+2. 打开 `tests/data/stage1-protocols.pcap`，快速导入应得到 **18 包、1156 原始字节**；列表最近保留和匹配数应能解释。
+3. 点 TCP 报文，展开链路/网络/传输字段；关键字段核对含 MAC、类型、IP 版本、TTL/Hop Limit、协议号及 SYN/ACK/FIN/RST。选 IPv6、ARP、DNS 分别核对。
+4. 筛选 TCP，再输入错误 IP：错误需说明，旧筛选应保留。重置后恢复全部列表；会话总数和统计图不变。
+5. 切统计页，滚动检查八张图；长度边界是 ≤46、47–1500、>1500，网络其他包含 ARP。
+6. 再打开文件选择按时间回放和低倍速，观察暂停/继续/停止，运行中不能直接换源，结束时保留结果。
+7. 选择实际 WLAN/Ethernet 网卡开始，确认窗口可操作；开启保存后生成少量测试流量，停止并重新打开新 PCAP。拒绝覆盖已有文件；保存失败不应终止采集。
+8. 切资源页，确认真实数值、软件与会话时长区别、日志目录和记录状态；停止采集再开启新会话，软件连续运行时长不归零。
+9. 正常退出，检查运行目录中存在 `run.json`、`resources.csv`、`events.jsonl` 和 `result.json`。缺失/错误需如实记录，不视为验收通过。
+
+## 记录文件
+
+默认运行目录：Qt 的 `QStandardPaths::AppLocalDataLocation` 应用数据目录下的 `runs/时间-随机标识`（实际绝对路径显示在资源页）。可用 `FLOWGUARD_LOG_ROOT` 环境变量改为测试目录，不影响正常使用入口。
+
+| 文件 | 内容 |
+| --- | --- |
+| run.json | UTC 起始时间、运行 ID、配置时 commit/dirty、EXE SHA-256、Qt/OS/CPU/内存、日志盘可用空间 |
+| resources.csv | 完整时段每秒资源、单调时长、会话/来源/状态、处理/保存、队列/丢弃、GUI 定时器延迟；不可用值为空 |
+| events.jsonl | 控制请求/结果与采集参数、状态、来源和保存异常；JSON 每行一条，控制结果附会话累计计数 |
+| result.json | 正常退出时间、实际进程时长、最终计数、来源/保存/日志错误；没有此文件不能推定正常退出 |
+
+CSV source：0=None，1=Live，2=File；state：0=Idle，1=Running，2=Paused，3=Stopped，4=Completed，5=Failed。
+normal_exit 只表示正常完成退出，不代表采集/保存无错误，更不代表通过 24 小时验收。dirty_at_configure 是配置时的状态，正式冻结后应重新配置构建，并核对 EXE 哈希。
+schema 2 新增 `list_evicted`，表示列表达到 2000 条后的累计历史淘汰；`display_dropped` 是后端待显示缓冲丢弃，两者均不同于采集队列或驱动丢包。筛选不会让列表历史淘汰计数增加。
+日志包含实际网卡/文件设置，分享证据前检查内容；不要提交个人原始网络抓包。本轮自产回环流量可用于复现检查。
+
+## 性能图与汇总分析
+
+这是独立的测试后分析工具，不替代标准 CMake 构建/运行。它读取一次 GUI 运行目录，绝不拼接多个进程的时长。
+使用标准 Python 虚拟环境安装 `tools/requirements-analysis.txt` 后：
+
+```powershell
+python tools/analyze_run.py "实际运行目录" --output "新的分析结果目录"
+```
+
+输出 `performance.png`（完整时段八项性能曲线）、`summary.json`（加权 CPU 平均/峰值、内存变化、I/O、队列和会话计数等）与 `report.md`（真实数据和人工分析提示）。输出目录必须不存在，防止覆盖证据。
+只需汇总、不生成图时添加 `--no-plots`，这时只使用 Python 标准库。
+曲线标出缺失/长间隔和会话重置，CPU 平均按实际时间加权；内存首尾变化不直接等同内存泄漏。GUI 定时器延迟不是所有操作的响应时间，必须补人工操作记录。
+
+## 正式全天验收前必须准备
+
+- 在完整 Qt 功能经用户验收后，冻结版本、重新配置构建，记下 commit、EXE 哈希、环境和保存策略。
+- 检查日志盘和 PCAP 盘空间；默认单个保存文件 1 GiB，达到上限会关闭保存但继续分析，不承诺自动轮转。全天持续保存不是当前默认策略。
+- 用户确认后再开始至少 24 小时连续运行；避免休眠造成采集间断，发生休眠/断网/重启必须记录；进程活了 24 小时不自动等同抓包连续 24 小时。
+- 用 `docs/long-run-observations.csv` 记录真实电脑使用、切页/筛选/字段/窗口操作和响应现象，保留开始、中间、结束截图。
+- 结束后正常退出，从日志生成报告，再结合人工观察分析 CPU 与流量、内存趋势、I/O、队列/丢弃和对正常工作的影响。
+- 不足一天标为短时检查；记录的缺口、来源错误、保存错误、日志故障均需解释，不能只看“时长 ≥86400”。
+
+## 当前边界
+
+本轮构建、16 项回归、五分钟实际 Qt 采集保存重读和性能图证据见 [自查记录](acceptance/2026-11-22-qt/README.md)。
+目录合并回原 `FlowGuard/` 后已重新配置、构建，原目录配置还启用了 TShark 独立对照，因此迁移回归共 **17/17 通过**；阶段三源码和阶段一资料均已保留。
+
+- 本轮短时验证不代替任务书中的长时间稳定性测试和正式至少 24 小时运行；人工使用情况、全天实际分析和最终 DOC/SRC/BIN 打包仍待后续阶段。
+- 图表屏幕最多 3600 点，列表最多 2000 条；全天资源原始 CSV 独立保留。图表只显示完整会话口径，不随显示筛选变化。
+- 不支持 PCAPNG、十六进制载荷、流重组、运行中变速/拖动定位、自动磁盘轮转或异常流量报警。
+- 实时回环设备 DLT=0 的报文按现有解析合同标为 Unsupported；它能验证采集/保存/Qt 控制，但不能用作真实 Ethernet 协议字段验证。
+- 新建来源时沿用第二阶段后端的初始化语义：初始化后来源打开失败可能重置原会话结果；开始前已有结果会提示替换。失败后保留当前错误供重试，不承诺失败来源自动恢复旧会话。
+- 日志创建失败已自动测试；没有通过填满真实磁盘来验证磁盘不足场景，也未做实际跨天运行，仍需正式验收。

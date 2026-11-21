@@ -1,0 +1,1 @@
+local_datetime,run_id,session_id,activity_or_action,response_observation,measured_latency_ms_if_available,normal_computer_use_impact,event_or_error,screenshot_reference,observer

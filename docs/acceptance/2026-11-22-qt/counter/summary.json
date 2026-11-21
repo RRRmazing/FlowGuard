@@ -1,0 +1,53 @@
+{
+  "run_id": "20261122-025821-908-8ce1eccf45aa40eea2594802ab38075c",
+  "commit": "b6d1aed4abcd8e5f5817b8f4e47bd78aeddd21ac",
+  "dirty_at_configure": "true",
+  "started": "2026-11-21T18:58:21.908Z",
+  "ended": "2026-11-21T18:59:10.126Z",
+  "duration_seconds": 48.214,
+  "observed_sample_span_seconds": 47.216,
+  "normal_exit": true,
+  "logging_error": "",
+  "damaged_event_records": 0,
+  "samples": 49,
+  "missing_cpu_samples": 1,
+  "missing_memory_samples": 0,
+  "gaps_over_2_5_seconds": 0,
+  "max_sampling_interval_seconds": 1.0090000000000003,
+  "cpu_time_weighted_mean_percent": 0.24617592845857314,
+  "cpu_peak_percent": 3.71285,
+  "memory_start_bytes": 52551680.0,
+  "memory_end_bytes": 57049088.0,
+  "memory_peak_bytes": 57049088.0,
+  "memory_change_bytes": 4497408.0,
+  "memory_endpoint_growth_bytes_per_hour": 342906404.60860723,
+  "max_queue_packets": 1.0,
+  "max_gui_timer_delay_ms": 24.0,
+  "sessions": {
+    "1": {
+      "source": "1",
+      "total_packets": 2249,
+      "total_bytes": 125944,
+      "saved_packets": 2249,
+      "queue_dropped": 0,
+      "display_dropped": 0,
+      "late_history_packets": 0,
+      "list_evicted": 249,
+      "driver_dropped": 0,
+      "interface_dropped": 0
+    }
+  },
+  "recorded_error_events": [],
+  "process_read_bytes_delta": 170924,
+  "process_write_bytes_delta": 291456,
+  "duration_at_least_24h": false,
+  "manual_review_required": true,
+  "notes": [
+    "Duration is process lifetime; review session/source states to establish actual capture coverage.",
+    "24h duration alone is not a passing verdict. Inspect gaps, errors, responsiveness and normal computer use.",
+    "Memory endpoint growth is descriptive, not proof of a memory leak.",
+    "GUI timer delay is event-loop scheduling delay, not all user interactions latency.",
+    "Process I/O is not physical disk throughput. First samples omit earlier process I/O.",
+    "Per-session counters also use control-result snapshots; inspect event logs for very short sessions."
+  ]
+}

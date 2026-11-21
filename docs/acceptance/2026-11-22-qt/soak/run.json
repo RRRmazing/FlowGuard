@@ -1,0 +1,17 @@
+{
+    "architecture": "x86_64",
+    "commit": "b6d1aed4abcd8e5f5817b8f4e47bd78aeddd21ac",
+    "cpu": "",
+    "dirty_at_configure": "true",
+    "executable_sha256": "261493c02e79f92bfda2f1bb89b3609c54a18cf622730860434ca917cb2a4ae0",
+    "log_disk_available_bytes": "104488226816",
+    "logical_processors": 16,
+    "os": "Windows 11 Version 25H2",
+    "qt": "6.11.0",
+    "run_id": "20261122-024356-031-216a60fecbf74f56a6358d383174a190",
+    "schema": 1,
+    "scope": "GUI process; CPU normalized by all logical processors; I/O is process cumulative",
+    "started": "2026-11-21T18:43:56.031Z",
+    "total_memory_bytes": "16388198400",
+    "version": "0.1.0"
+}

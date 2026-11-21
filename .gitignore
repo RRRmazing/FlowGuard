@@ -4,6 +4,7 @@
 /CMakeUserPresets.json
 /.vs/
 *.user
+__pycache__/
 *.pcap
 *.pcapng
 !tests/data/*.pcap

@@ -1,0 +1,22 @@
+2026-11-21 谢福祥阶段1：全部实现项与助手自查完成，待用户最终验收
+
+范围：任务书截图阶段1中谢福祥列 + 新接口要求的 PCAP 基础读取。
+分支 feat/parser；原解析提交27a495e；合并来源 origin/feat/capture 5c50b0d；main 771d27e。
+Git 合并和实现改动仍待提交；未推送，未改 main。
+
+MSVC x64 Release / CMake windows-msvc / Ninja 构建通过，无编译警告。
+完整 CTest 12/12 通过，无跳过；Npcap 管理员模式测试在获准的沙箱外执行。
+基础解析检查：4328。
+18 种有效协议种子的全前缀、定点变异、字段树预算检查：75374。
+PCAP 基础读取检查：346。
+固定 Wireshark/TShark 对照：18 包，312 字段一致。
+真实 WLAN Ethernet 对照：8 包，IPv4/IPv6各4，128字段一致，零队列丢包。
+真实在线解析与PCAP离线重读结果完全一致。详见 wireshark-reference.txt、live-reference.txt。
+
+用户此前已截图验证单包Ethernet/IPv4/UDP，与Wireshark一致。
+本轮进一步完成TCP标志、ARP、DNS、IPv6、VLAN和扩展头的独立对照及真实Ethernet集成验证。
+最终检查指南与代码讲解：docs/stage1-xie-acceptance.md。
+
+现有限制属于阶段1明确边界：不做IP/TCP重组、校验和验证、ESP解密、未知DLT支持。
+正式PcapWriter/保存回放、统计图表、资源监控、统一主窗口是后续职责，不列作本阶段截图任务欠项。
+公共变更供队友审查：PcapReader私有Impl；CMake新增解析/读取/验证目标；未改CaptureSession公开签名。

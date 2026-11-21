@@ -1,0 +1,16 @@
+Real WLAN capture through teammate CaptureSession -> parsePacket, PCAP DLT=1.
+4 self-generated IPv4 UDP + 4 self-generated IPv6 UDP packets.
+BPF: udp and src port 49871 and dst port 49872
+Processed=8, exported=8, queue drops=0, all Complete.
+All live ParsedPacket records exactly equal offline re-read ParsedPacket records.
+Raw capture and detailed live JSON remain in ignored build/stage1-evidence only.
+No claim of live TCP/ARP/DNS; those are independently covered by the fixed corpus.
+PASS packet 1: real Ethernet capture
+PASS packet 2: real Ethernet capture
+PASS packet 3: real Ethernet capture
+PASS packet 4: real Ethernet capture
+PASS packet 5: real Ethernet capture
+PASS packet 6: real Ethernet capture
+PASS packet 7: real Ethernet capture
+PASS packet 8: real Ethernet capture
+PASS: 8 packets, 128 field comparisons against Wireshark/TShark

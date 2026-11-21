@@ -1,0 +1,2 @@
+# Test/report tooling only; not a runtime dependency of FlowGuard.exe.
+matplotlib>=3.9,<4

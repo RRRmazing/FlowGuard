@@ -1,0 +1,42 @@
+Test project F:/FlowGuard/FlowGuard/build/windows-msvc
+      Start  1: stage0_smoke
+ 1/17 Test  #1: stage0_smoke .....................   Passed    1.01 sec
+      Start  2: packet_parser
+ 2/17 Test  #2: packet_parser ....................   Passed    0.08 sec
+      Start  3: capture_device_enumerator
+ 3/17 Test  #3: capture_device_enumerator ........   Passed    0.04 sec
+      Start  4: capture_probe_help
+ 4/17 Test  #4: capture_probe_help ...............   Passed    0.05 sec
+      Start  5: capture_probe_bad_args
+ 5/17 Test  #5: capture_probe_bad_args ...........   Passed    0.02 sec
+      Start  6: capture_session_unit
+ 6/17 Test  #6: capture_session_unit .............   Passed    0.05 sec
+      Start  7: capture_loopback_live
+ 7/17 Test  #7: capture_loopback_live ............   Passed    1.03 sec
+      Start  8: pcap_reader
+ 8/17 Test  #8: pcap_reader ......................   Passed    0.23 sec
+      Start  9: offline_parser_fixture
+ 9/17 Test  #9: offline_parser_fixture ...........   Passed    0.04 sec
+      Start 10: capture_parser_loopback_live
+10/17 Test #10: capture_parser_loopback_live .....   Passed    0.32 sec
+      Start 11: parser_wireshark_reference
+11/17 Test #11: parser_wireshark_reference .......   Passed    2.15 sec
+      Start 12: parser_protocol_boundaries
+12/17 Test #12: parser_protocol_boundaries .......   Passed    0.06 sec
+      Start 13: stage2_processing_storage
+13/17 Test #13: stage2_processing_storage ........   Passed    0.73 sec
+      Start 14: stage3_support
+14/17 Test #14: stage3_support ...................   Passed    0.12 sec
+      Start 15: stage3_gui_file
+15/17 Test #15: stage3_gui_file ..................   Passed    4.72 sec
+      Start 16: stage3_gui_integration
+16/17 Test #16: stage3_gui_integration ...........   Passed    1.83 sec
+      Start 17: stage3_run_analysis
+17/17 Test #17: stage3_run_analysis ..............   Passed    0.12 sec
+
+100% tests passed out of 17
+
+Label Time Summary:
+hardware    =   3.18 sec*proc (3 tests)
+
+Total Test time (real) =  12.95 sec

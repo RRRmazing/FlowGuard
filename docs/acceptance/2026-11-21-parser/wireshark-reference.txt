@@ -1,0 +1,20 @@
+Wireshark/TShark 4.6.10; synthetic stage-1 protocol corpus
+PASS packet 1: IPv4 UDP
+PASS packet 2: IPv4 TCP SYN
+PASS packet 3: IPv4 TCP FIN ACK
+PASS packet 4: IPv4 TCP RST ACK
+PASS packet 5: IPv6 UDP
+PASS packet 6: IPv6 TCP SYN ACK
+PASS packet 7: ARP request
+PASS packet 8: ARP reply
+PASS packet 9: UDP DNS query
+PASS packet 10: UDP DNS compressed answer
+PASS packet 11: IPv6 UDP DNS
+PASS packet 12: TCP DNS
+PASS packet 13: VLAN IPv4 UDP
+PASS packet 14: QinQ IPv6 UDP
+PASS packet 15: IPv6 Hop-by-Hop UDP
+PASS packet 16: IPv6 atomic fragment UDP
+PASS packet 17: IPv4 options UDP
+PASS packet 18: Non-IP experimental EtherType
+PASS: 18 packets, 312 field comparisons against Wireshark/TShark

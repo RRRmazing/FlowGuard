@@ -1,0 +1,41 @@
+任务书网络底层阶段：何俊杰负责的采集部分
+日期：2026-11-21；分支：feat/capture；起点：efa0f59。
+
+完成
+网卡选择；Npcap 实际捕获；开始/停止/重启；时间戳、原始及捕获长度；
+自持有报文字节；采集线程；包数/字节数双上限队列；丢包与驱动计数；
+BPF 编译/应用及错误处理；析构释放、失败恢复；独立 CLI 与采集测试。
+未实现：谢福祥负责的解析、PCAP 读写、显示过滤、图表和监控。
+本轮也未提前实现何俊杰后续阶段的统计或 Qt 集成。
+
+公共接口
+原有 RawPacket、PacketRecord 和公开函数签名不变。
+CaptureSession 增加私有 Impl 指针、公共头文件增加 memory 包含；
+队友同步头文件后重新构建，避免混用旧类布局。
+
+真实验证
+标准 CMake 配置与全工程 Release 构建成功，包括原 Qt 主程序。
+CTest：6/6 通过（2.11 秒），真实回环项已执行、未跳过。
+回环项捕获 16 包自产 UDP 数据，校验字节、时间戳和长度；
+空闲停止 1 ms；还验证非法设备/BPF、重新启动、容量溢出和析构释放。
+单元测试包含 10,000 包并发生产/消费，计数与队列边界通过。
+CLI 无匹配流量连续 3 次启动/停止，每次停止耗时 1、1、2 ms，退出 0。
+Wi-Fi 实际网卡：ip 过滤，每轮 2 秒、连续 2 轮，分别处理 54 和 20 包；
+应用队列丢包/非法包均为 0，停止耗时均为 0 ms，退出 0。
+实机包数与耗时只代表此次短测，不代表长期稳定性或通用性能保证。
+未进行 24 小时测试；未进行桌面操作或截图；未保存实际流量载荷。
+共享记录不包含本机 IP、网卡 GUID 或报文载荷。
+
+复现
+按根 README 准备开发/运行环境：
+cmake --preset windows-msvc
+cmake --build --preset windows-msvc
+ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
+仅无界面检查时，将当前终端 QT_QPA_PLATFORM 设为 offscreen。
+./build/windows-msvc/flowguard_capture_probe.exe --list-devices
+./build/windows-msvc/flowguard_capture_probe.exe --capture --device <设备ID> --seconds 3 --cycles 2 --bpf ip
+
+下一轮联调
+队友按公共头文件实现 parsePacket，集成时由消费者调用 tryPop(raw)，
+然后 parsePacket(raw, sequence)。目前只交付 RawPacket，不伪造解析结果。
+main 保持共同基线，所有本轮功能只在 feat/capture 提交和推送。

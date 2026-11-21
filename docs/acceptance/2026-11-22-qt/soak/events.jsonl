@@ -1,0 +1,11 @@
+{"detail":{},"elapsed_seconds":0.012,"event":"application_started","timestamp":"2026-11-21T18:43:56.044Z"}
+{"detail":{"name":"enumerate","settings":{}},"elapsed_seconds":0.012,"event":"control_requested","timestamp":"2026-11-21T18:43:56.044Z"}
+{"detail":{"message":"","name":"enumerate","ok":true,"session":{"display_dropped":"0","late_history_packets":"0","queue_dropped":"0","saved_packets":"0","session_id":"0","source":0,"state":0,"total_bytes":"0","total_packets":"0"}},"elapsed_seconds":0.039,"event":"control_finished","timestamp":"2026-11-21T18:43:56.071Z"}
+{"detail":{"saving_active":false,"session_id":"0","source":0,"state":0},"elapsed_seconds":1.002,"event":"session_state","timestamp":"2026-11-21T18:43:57.034Z"}
+{"detail":{"name":"start_live","settings":{"bpf":"udp and dst port 61930","device":"\\Device\\NPF_Loopback","promiscuous":false,"snapshot_length":65535}},"elapsed_seconds":1.076,"event":"control_requested","timestamp":"2026-11-21T18:43:57.108Z"}
+{"detail":{"message":"","name":"start_live","ok":true,"session":{"display_dropped":"0","late_history_packets":"0","queue_dropped":"0","saved_packets":"0","session_id":"1","source":1,"state":1,"total_bytes":"0","total_packets":"0"}},"elapsed_seconds":1.085,"event":"control_finished","timestamp":"2026-11-21T18:43:57.116Z"}
+{"detail":{"saving_active":true,"session_id":"1","source":1,"state":1},"elapsed_seconds":2.008,"event":"session_state","timestamp":"2026-11-21T18:43:58.039Z"}
+{"detail":{"name":"stop","settings":{}},"elapsed_seconds":301.065,"event":"control_requested","timestamp":"2026-11-21T18:48:57.096Z"}
+{"detail":{"message":"","name":"stop","ok":true,"session":{"display_dropped":"0","late_history_packets":"0","queue_dropped":"0","saved_packets":"14998","session_id":"1","source":1,"state":3,"total_bytes":"839888","total_packets":"14998"}},"elapsed_seconds":301.069,"event":"control_finished","timestamp":"2026-11-21T18:48:57.100Z"}
+{"detail":{"saving_active":false,"session_id":"1","source":1,"state":3},"elapsed_seconds":302.027,"event":"session_state","timestamp":"2026-11-21T18:48:58.059Z"}
+{"detail":{"packets":"14998","saved_packets":"14998","session_id":"1"},"elapsed_seconds":303.215,"event":"application_stopped","timestamp":"2026-11-21T18:48:59.247Z"}
