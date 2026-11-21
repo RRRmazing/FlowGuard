@@ -474,7 +474,7 @@ struct MainWindow::Impl
     void updateSecond()
     {
         if (pages->currentIndex() == 1)
-            charts->refresh(snapshot);
+            charts->refresh(snapshot, sourceDescription);
         auto opt = [](const auto &n) { return n ? QString::number(*n) : QStringLiteral("不可用"); };
         updateTimeBar();
         resourceMetrics[0]->setText(resource.cpuPercent ? QString::number(*resource.cpuPercent, 'f', 2) + " %"
@@ -488,14 +488,11 @@ struct MainWindow::Impl
         resourcesText->setText(
             QStringLiteral("<table cellspacing='0' cellpadding='0'>"
                            "<tr><td style='padding-right:28px'>驱动接收 %1 包</td>"
-                           "<td style='padding-right:28px'>驱动丢弃 %2 包</td><td>接口丢弃 %3 包</td></tr>"
-                           "<tr><td>队列 %4 包</td><td>队列大小 %5 B</td><td>采集队列丢弃 %6 包</td></tr>"
-                           "<tr><td>展示缓冲丢弃 %7 包</td><td>已保存 %8 包</td></tr></table>"
+                           "<td style='padding-right:28px'>驱动丢弃 %2 包</td>"
+                           "<td style='padding-right:28px'>接口丢弃 %3 包</td><td>已保存 %4 包</td></tr></table>"
                            "CPU 占整机能力；I/O 是进程累计读写量，不是物理磁盘吞吐。")
                 .arg(opt(snapshot.capture.driverReceived), opt(snapshot.capture.driverDropped),
-                     opt(snapshot.capture.interfaceDropped), num(snapshot.capture.queuedPackets),
-                     num(snapshot.capture.queuedBytes), num(snapshot.capture.queueDroppedPackets),
-                     num(snapshot.displayDroppedPackets), num(snapshot.savedPackets)));
+                     opt(snapshot.capture.interfaceDropped), num(snapshot.savedPackets)));
         const QString saving = snapshot.savingActive      ? QStringLiteral("保存中")
                                : snapshot.savingRequested ? QStringLiteral("等待首包/准备保存")
                                                           : QStringLiteral("未保存");

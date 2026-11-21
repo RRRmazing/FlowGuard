@@ -1,10 +1,15 @@
 // Primary author: Xie Fuxiang. AI-assisted integration tests, pending user review.
 #include "core/module_contracts.h"
+#include "ui/chart_panel.h"
 #include "ui/main_window.h"
 #include <QTemporaryDir>
 #include <QUdpSocket>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QPieSeries>
+#include <QtCharts/QValueAxis>
 #include <QtTest/QTest>
 #include <QtWidgets>
+#include <cmath>
 #include <iostream>
 
 static int failures = 0;
@@ -30,6 +35,42 @@ static bool wait(const std::function<bool()> &predicate, int ms = 4000)
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    {
+        flowguard::ChartPanel panel;
+        flowguard::ProcessingSnapshot s;
+        panel.refresh(s);
+        auto view = [&](int i) { return panel.findChild<QChartView *>(QString("statisticsChart%1").arg(i)); };
+        check(view(2)->chart()->title().contains(QStringLiteral("暂无数据")) &&
+                  view(3)->chart()->title().contains(QStringLiteral("暂无数据")),
+              "empty statistics have explicit empty states");
+        s.statistics.totalPackets = 3;
+        s.statistics.lengthFrequency = {{60, 3}};
+        s.statistics.lengthGroups = {0, 3, 0};
+        s.statistics.networkCounts[flowguard::NetworkProtocol::IPv4] = 3;
+        panel.refresh(s, QStringLiteral("test.pcap"));
+        auto *line = qobject_cast<QLineSeries *>(view(2)->chart()->series().front());
+        check(line && line->count() == 1 && line->pointsVisible(), "single length remains visible as a point");
+        for (int i : {2, 3, 4, 6})
+        {
+            auto *axis = qobject_cast<QValueAxis *>(view(i)->chart()->axes(Qt::Vertical).front());
+            const double step = (axis->max() - axis->min()) / (axis->tickCount() - 1);
+            check(std::abs(step - std::round(step)) < 1e-8 && axis->labelFormat() == "%.0f",
+                  "packet count ticks are integers");
+        }
+        s.statistics.lengthFrequency = {{60, 1}, {100, 2}};
+        s.history.push_back({std::chrono::system_clock::now(), 1, {3, 200, 1. / 3.}, {}, {}});
+        panel.refresh(s, QStringLiteral("test.pcap"));
+        line = qobject_cast<QLineSeries *>(view(2)->chart()->series().front());
+        check(line->points().contains(QPointF(61, 0)) && line->points().contains(QPointF(99, 0)),
+              "missing lengths have zero frequency instead of interpolated counts");
+        auto *pie = qobject_cast<QPieSeries *>(view(5)->chart()->series().front());
+        check(pie->slices().front()->label().contains(QStringLiteral("3 包")), "pie labels include counts");
+        check(panel.findChild<QLabel *>("statisticsScope")->text().contains(QStringLiteral("test.pcap")) &&
+                  panel.findChild<QLabel *>("statisticsScope")->text().contains("3600"),
+              "statistics identify source and recent window limit");
+        auto *dnsAxis = qobject_cast<QValueAxis *>(view(7)->chart()->axes(Qt::Vertical).front());
+        check(dnsAxis->min() == 0 && dnsAxis->max() == 100, "DNS remains a percentage axis");
+    }
     if (argc < 2)
         return 2;
     QTemporaryDir temp;
@@ -133,6 +174,11 @@ int main(int argc, char **argv)
             {
                 nav.front()->setCurrentRow(i);
                 QTest::qWait(60);
+                if (i == 1 && !previewDirectory.isEmpty())
+                    w.findChild<QChartView *>("statisticsChart0")
+                        ->parentWidget()
+                        ->grab()
+                        .save(previewDirectory + "/statistics-full.png");
             }
         check(w.totalPackets() == 18, "page changes preserve session");
 
