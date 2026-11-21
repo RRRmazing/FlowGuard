@@ -101,6 +101,8 @@ public:
     void reset();
     void add(const PacketRecord& record);
     StatisticsSnapshot snapshot() const;
+private:
+    StatisticsSnapshot totals_;
 };
 RateSample calculateRate(const StatisticsSnapshot& previous,
                          const StatisticsSnapshot& current,
@@ -140,7 +142,11 @@ public:
     OperationResult open(const std::filesystem::path& path,
                          const PcapWriteOptions& options);
     OperationResult write(const RawPacket& packet);
+    OperationResult flush();
     OperationResult close();
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 enum class ProtocolFilter { All, IPv4, IPv6, Arp, Tcp, Udp, Dns, Other };

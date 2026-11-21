@@ -1,0 +1,27 @@
+{
+  "start_utc": "2026-11-21T16:31:43.636743+00:00",
+  "end_utc": "2026-11-21T16:36:43.911479+00:00",
+  "duration_seconds": 300.125,
+  "requested_seconds": 300,
+  "sent_packets": 2764,
+  "final": {
+    "packets": "2763",
+    "saved": "2763",
+    "history": "298",
+    "error": "0",
+    "saving_error": "0"
+  },
+  "readback": {
+    "packets": "2763",
+    "saved": "0",
+    "history": "301",
+    "error": "0",
+    "saving_error": "0"
+  },
+  "returncode": 0,
+  "live_ok": true,
+  "readback_consistent": true,
+  "samples": 285,
+  "peak_rss_bytes": 8216576,
+  "passed": true
+}

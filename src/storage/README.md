@@ -28,4 +28,19 @@ close 可重复调用，析构释放资源。
 测试包含四种字节序/时间精度组合、逐字节残缺、EOF 与错误、非法长度、资源上限及读取后调用公共解析接口。
 固定可分享样本见 `tests/data/README.md`，离线查看命令见 `src/parser/README.md`。
 
-当前只实现基础读取；PcapWriter、保存、回放节奏与 UI 导入按钮属于后续任务，本次未实现。
+以上为谢福祥第一阶段 Reader 说明，第二阶段继续原样复用。
+
+## 第二阶段：PcapWriter（何俊杰）
+
+Writer 实现 open/write/flush/close，新增私有 Impl。CREATE_NEW 原子创建新文件，
+拒绝覆盖已有文件，支持原生中文路径；写经典 PCAP 2.4 小端、微秒时间戳。
+输入必须满足原始字节/长度/snapshot/DLT 一致，时间位于 PCAP 的无符号 32 位秒范围。
+纳秒时间取整至微秒，记录不改载荷；输出大小包含全局头与每包头。
+
+默认 1 GiB 上限；若下一记录越界，整条记录不写入并返回 ResourceLimit。
+WriteFile 处理完整写入，失败后 Writer 不再允许追加；flush/close 报告错误，close 可重复。
+持续有写入时每秒 flush；ProcessingSession 另在空闲采样时调用 flush，结束时显式 close。
+析构释放资源，但需要获知关闭错误的调用方必须显式 close。
+
+回放节奏与后台保存控制由 `core/processing_session.h` 提供，Qt 按交接文档接入。
+本模块没有窗口、图表或显示过滤；完整验收见 docs/stage2-handoff.md。

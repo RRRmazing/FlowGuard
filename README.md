@@ -1,8 +1,10 @@
 # FlowGuard 流量哨兵
 
 计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。阶段 0 工程骨架已建立；
-当前 `feat/capture` 分支已完成公共模块声明、网卡枚举、实际采集、开始/停止/重启、
-BPF 应用、后台线程和有界队列，提供命令行验证程序。当前分支同时接入解析、字段树与 PCAP 基础读取；统计、PCAP 保存和回放控制仍待实现。
+当前 `feat/processing-storage` 基于双方第一阶段合并版本，已完成采集、解析、字段树、
+PCAP 读取与保存、长度/协议统计、速率及统一后台回放控制。
+按最新分工，何俊杰负责本阶段后台，谢福祥下一阶段接入完整 Qt 窗口、图表及资源监控。
+交接接口与用法见 [第二阶段交接说明](docs/stage2-handoff.md)。
 
 ## 开发依赖
 
@@ -68,7 +70,7 @@ $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
 如果缺少 DLL，说明运行依赖未准备好，并不一定是源码编译失败。
 
 阶段 0 窗口应显示项目名称、阶段说明和 Npcap 版本，可以调整大小并正常关闭。
-当前不采集网络流量。
+该窗口暂未接入后台采集控件；实际采集、统计和保存可通过命令行程序或 ProcessingSession 使用。
 
 ## 测试与验收
 
@@ -78,7 +80,7 @@ $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
 ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 ```
 
-CTest 当前包含 `stage0_smoke` 和五项 `capture_*` 测试：前者加载实际的
+CTest 当前包含采集、解析、Reader 和第二阶段后台等 12 项测试（可选 TShark 对照需另行配置）。其中 `stage0_smoke` 加载实际的
 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出；后者验证设备信息转换、
 资源释放、命令行参数、并发队列和采集生命周期；`capture_loopback_live` 会打开
 Npcap 回环设备并收发本机自产 UDP 流量。无回环设备时该项明确跳过，不能视为实机验证通过。
@@ -108,8 +110,9 @@ ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-test
 | `src/core` | 原始报文、解析结果及公共模块接口声明 |
 | `src/capture` | 已实现枚举、实际采集、线程、有界缓冲与命令行验证 |
 | `src/parser` | 协议解析、字段树和固定样本测试 |
-| `src/statistics` | 后续统计计算 |
-| `src/storage` | 经典 PCAP 基础读取；保存待实现 |
+| `src/statistics` | 长度/协议/DNS/异常计数与区间速率 |
+| `src/storage` | 经典 PCAP 读取与安全保存，复用第一阶段 Reader |
+| `src/processing` | 统一后台、互斥输入、回放控制、统计与保存及有界界面批次 |
 | `src/ui` | 窗口与显示 |
 | `tests/data` | 可重复验证的报文样本 |
 | `docs` | 阶段记录和接口约定 |
@@ -122,6 +125,17 @@ ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-test
 保留各自正常的 Git 作者身份，功能分支通过审查和验收后合并到 main。
 
 阶段指南见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
+
+## 第二阶段后台交付
+
+```powershell
+.\build\windows-msvc\flowguard_processing_probe.exe --input .\tests\data\stage1-protocols.pcap
+.\build\windows-msvc\flowguard_processing_probe.exe --input .\tests\data\stage1-protocols.pcap --output .\build\新的保存文件.pcap
+```
+
+相同程序可用 `--device ID --bpf EXPR --seconds N` 做实机采集处理。
+第三阶段请链接 `flowguard_processing` 并包含 `core/processing_session.h`，不要另写一套统计或保存逻辑。
+本轮持续试运行按用户最新要求为 5 分钟；不代表最终 24 小时测试已完成。
 
 ## 谢福祥阶段 1 交付
 

@@ -1,5 +1,15 @@
 # FlowGuard 公共开发接口文档 v1.0
 
+## 2026-11-22 第二阶段更新（优先于原分工）
+
+用户重新分工：何俊杰独立完成第二阶段“处理与存储”，谢福祥独立完成第三阶段
+“Qt 可视化与集成”。阶段一已有解析器、PCAP Reader 原样复用。
+当前 `feat/processing-storage` 基于 `origin/main` 的 `7e38e47`；已实现 StatisticsEngine、
+calculateRate、PcapWriter 和统一 ProcessingSession，新增 PcapWriter::flush 与私有状态。
+界面唯一推荐入口是 `src/core/processing_session.h`；新增类型/方法和交接用法详见
+[第二阶段交接说明](stage2-handoff.md)。本轮不实现 Qt 控件、图表、显示过滤或资源面板。
+本文下方模块声明已与实际头文件同步；原文中“统计/Writer 未实现”的历史状态以本段为准。
+
 更新日期：2026-11-21。原始设计源码基线：`main` / `3dcb4d67ba543df5539c61fa9e93195c9015d02b`。
 
 后续实现状态（`feat/capture`）：公共声明头文件已在 `44ecf65` 落地；当前分支已实现
@@ -40,12 +50,13 @@ Qt 继续用于主窗口、控件、图表、信号/槽和界面刷新。核心�
 | `src/capture` | 何俊杰 | 枚举网卡、捕获、开始/停止、采集线程、有界队列、应用 BPF |
 | `src/parser` | 谢福祥 | 协议解析、字段树、ARP/DNS、边界检查和固定样本测试 |
 | `src/statistics` | 何俊杰 | 长度/协议计数、速率和时间序列的数据接口 |
-| `src/storage` | 谢福祥 | PCAP 读取、保存和错误处理；按阶段细表分工，不按简表概述重复实现 |
-| `src/ui/main_window.*`、`src/main.cpp`、系统处理流程 | 何俊杰 | 统一主窗口、报文列表、字段树显示、控制入口、实时与离线集成 |
+| `src/storage` | 何俊杰（第二阶段） | 复用谢福祥已有 Reader，完成 Writer、保存、错误处理和后台回放控制 |
+| `src/ui/main_window.*`、`src/main.cpp` | 谢福祥（第三阶段） | 统一主窗口、列表、字段树、控制入口、图表和后台接入 |
+| `src/processing` | 何俊杰（第二阶段） | 统一采集/文件输入、解析、统计、保存、回放及有界界面交接 |
 | 独立图表/显示过滤/资源监控组件 | 谢福祥 | 开发独立组件交由主窗口接入，避免双方同时修改 main_window |
 | `src/core`、CMakeLists.txt、本文 | 何俊杰合并维护，双方审查 | 谢福祥提出所需字段和依赖变更，由集成负责人统一合并 |
 
-BPF 由谢福祥提供输入配置与过滤测试，何俊杰在采集层编译并安装；文件按钮和保存控制由何俊杰接入，实际文件读写由谢福祥实现。
+BPF 控件与显示过滤由谢福祥在第三阶段提供；采集层应用 BPF 已完成。文件按钮由谢福祥接入，第二阶段后台保存/导入/回放控制由何俊杰提供。
 
 仓库阶段 1 是离线解析、阶段 2 是实时采集；任务书阶段 1 将二者合称“网络底层”。二者编号不同，不改变负责人。沟通和提交时同时写模块名，例如“采集：网卡枚举”，避免只说“完成阶段 1”。
 
@@ -220,6 +231,8 @@ public:
     void reset();
     void add(const PacketRecord& record);
     StatisticsSnapshot snapshot() const;
+private:
+    StatisticsSnapshot totals_;
 };
 RateSample calculateRate(const StatisticsSnapshot& previous,
                          const StatisticsSnapshot& current,
@@ -241,6 +254,9 @@ public:
     PcapFileInfo info() const;
     ReadStatus readNext(RawPacket& packet, OperationResult& result);
     void close();
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 struct PcapWriteOptions {
     std::uint32_t linkType = 1;
@@ -256,7 +272,11 @@ public:
     OperationResult open(const std::filesystem::path& path,
                          const PcapWriteOptions& options);
     OperationResult write(const RawPacket& packet);
+    OperationResult flush();
     OperationResult close();
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 enum class ProtocolFilter { All, IPv4, IPv6, Arp, Tcp, Udp, Dns, Other };
@@ -402,3 +422,4 @@ ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 | v1.0 / 2026-11-21 | 以 3dcb4d6 为源码基线，保留已有数据类型；增加待实现模块合同、负责人、Qt 交接、资源边界、统计/过滤口径与联调标准；本次未实现功能代码 |
 | v1.0 落地 / 2026-11-21 | feat/capture 的 44ecf65 提供公共头文件；随后实现枚举、命令行验证与测试，其他模块仍待实现；不改动远程 main |
 | 采集实现 / 2026-11-21 | 完成任务书网络底层阶段何俊杰的 CaptureSession、BPF 应用、线程、有界队列和实际抓包验证；公开签名不变，类增加私有 Impl；未实现队友模块 |
+| 第二阶段 / 2026-11-22 | 按新分工由何俊杰完成统计、速率、Writer、统一后台与回放，新增 ProcessingSession 交接；用户要求将本轮试运行缩短为 5 分钟，最终 24 小时验证仍待后续执行 |
