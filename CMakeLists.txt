@@ -15,17 +15,54 @@ set_target_properties(Npcap::Npcap PROPERTIES
     IMPORTED_LOCATION "${NPCAP_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${NPCAP_INCLUDE_DIR}")
 
+function(flowguard_configure_cpp target)
+    target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+    endif()
+endfunction()
+
+add_library(flowguard_capture STATIC
+    src/capture/capture_session.cpp
+    src/capture/capture_buffer.h
+    src/capture/device_enumerator.cpp
+    src/capture/device_enumerator_detail.h
+    src/core/module_contracts.h)
+target_include_directories(flowguard_capture PUBLIC src)
+target_link_libraries(flowguard_capture PUBLIC Npcap::Npcap ws2_32)
+flowguard_configure_cpp(flowguard_capture)
+
+add_executable(flowguard_capture_probe src/capture/capture_probe.cpp)
+target_link_libraries(flowguard_capture_probe PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_capture_probe)
+
+add_library(flowguard_contracts_check OBJECT tests/module_contracts_compile.cpp)
+target_include_directories(flowguard_contracts_check PRIVATE src)
+flowguard_configure_cpp(flowguard_contracts_check)
+
+add_executable(flowguard_capture_tests tests/device_enumerator_tests.cpp)
+target_link_libraries(flowguard_capture_tests PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_capture_tests)
+
+add_executable(flowguard_session_tests tests/capture_session_tests.cpp)
+target_link_libraries(flowguard_session_tests PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_session_tests)
+add_executable(flowguard_live_tests tests/capture_live_tests.cpp)
+target_link_libraries(flowguard_live_tests PRIVATE flowguard_capture)
+flowguard_configure_cpp(flowguard_live_tests)
+
+set_target_properties(flowguard_capture flowguard_capture_probe
+    flowguard_contracts_check flowguard_capture_tests flowguard_session_tests flowguard_live_tests PROPERTIES
+    AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+
 qt_add_executable(FlowGuard
     src/main.cpp
     src/ui/main_window.cpp
     src/ui/main_window.h
     src/core/packet_types.h)
 target_include_directories(FlowGuard PRIVATE src)
-target_link_libraries(FlowGuard PRIVATE Qt6::Widgets Npcap::Npcap ws2_32)
-target_compile_definitions(FlowGuard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-if(MSVC)
-    target_compile_options(FlowGuard PRIVATE /W4 /utf-8)
-endif()
+target_link_libraries(FlowGuard PRIVATE Qt6::Widgets flowguard_capture)
+flowguard_configure_cpp(FlowGuard)
 
 enable_testing()
 add_test(NAME stage0_smoke COMMAND FlowGuard --smoke-test)
@@ -45,3 +82,60 @@ if(MSVC)
 endif()
 add_test(NAME packet_parser COMMAND packet_parser_tests)
 set_tests_properties(packet_parser PROPERTIES TIMEOUT 15)
+add_test(NAME capture_device_enumerator COMMAND flowguard_capture_tests)
+add_test(NAME capture_probe_help COMMAND flowguard_capture_probe --help)
+add_test(NAME capture_probe_bad_args COMMAND flowguard_capture_probe --not-an-option)
+add_test(NAME capture_session_unit COMMAND flowguard_session_tests)
+add_test(NAME capture_loopback_live COMMAND flowguard_live_tests)
+set_tests_properties(capture_session_unit PROPERTIES TIMEOUT 20)
+set_tests_properties(capture_loopback_live PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77 LABELS "hardware")
+set_tests_properties(capture_probe_bad_args PROPERTIES WILL_FAIL TRUE)
+set_tests_properties(capture_device_enumerator capture_probe_help capture_probe_bad_args
+    PROPERTIES TIMEOUT 15)
+
+add_library(flowguard_storage STATIC src/storage/pcap_reader.cpp)
+target_include_directories(flowguard_storage PUBLIC src)
+flowguard_configure_cpp(flowguard_storage)
+add_executable(flowguard_reader_tests tests/pcap_reader_tests.cpp)
+target_link_libraries(flowguard_reader_tests PRIVATE flowguard_storage flowguard_parser)
+flowguard_configure_cpp(flowguard_reader_tests)
+add_executable(flowguard_offline_probe src/parser/offline_probe.cpp)
+target_link_libraries(flowguard_offline_probe PRIVATE flowguard_storage flowguard_parser)
+flowguard_configure_cpp(flowguard_offline_probe)
+set_target_properties(flowguard_storage flowguard_reader_tests flowguard_offline_probe PROPERTIES
+    AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_test(NAME pcap_reader COMMAND flowguard_reader_tests)
+add_test(NAME offline_parser_fixture COMMAND flowguard_offline_probe "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ethernet-ipv4-udp.pcap")
+set_tests_properties(pcap_reader offline_parser_fixture PROPERTIES TIMEOUT 15)
+
+add_executable(flowguard_capture_parser_tests tests/capture_parser_live_tests.cpp)
+target_link_libraries(flowguard_capture_parser_tests PRIVATE flowguard_capture flowguard_parser)
+flowguard_configure_cpp(flowguard_capture_parser_tests)
+set_target_properties(flowguard_capture_parser_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_test(NAME capture_parser_loopback_live COMMAND flowguard_capture_parser_tests)
+set_tests_properties(capture_parser_loopback_live PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77 LABELS "hardware")
+
+# Stage-1 end-to-end verification through the teammate's real CaptureSession.
+add_executable(flowguard_live_parse_probe src/parser/live_parse_probe.cpp)
+target_link_libraries(flowguard_live_parse_probe PRIVATE flowguard_capture flowguard_parser)
+flowguard_configure_cpp(flowguard_live_parse_probe)
+set_target_properties(flowguard_live_parse_probe PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+
+# Optional independent protocol oracle. The path is a local CMake cache value.
+set(FLOWGUARD_TSHARK_EXECUTABLE "" CACHE FILEPATH "Optional installed TShark for stage-1 field comparison")
+if(FLOWGUARD_TSHARK_EXECUTABLE)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME parser_wireshark_reference
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/tshark_compare.py"
+        --probe "$<TARGET_FILE:flowguard_offline_probe>" --tshark "${FLOWGUARD_TSHARK_EXECUTABLE}"
+        --pcap "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap"
+        --manifest "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.json")
+    set_tests_properties(parser_wireshark_reference PROPERTIES TIMEOUT 30)
+endif()
+
+add_executable(flowguard_parser_corpus_tests tests/parser_corpus_tests.cpp)
+target_link_libraries(flowguard_parser_corpus_tests PRIVATE flowguard_parser flowguard_storage)
+flowguard_configure_cpp(flowguard_parser_corpus_tests)
+set_target_properties(flowguard_parser_corpus_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_test(NAME parser_protocol_boundaries COMMAND flowguard_parser_corpus_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
+set_tests_properties(parser_protocol_boundaries PROPERTIES TIMEOUT 30)

@@ -1,57 +1,69 @@
 # 报文解析模块（谢福祥，阶段 1）
 
-入口为 `flowguard::parsePacket(const RawPacket&, std::uint64_t sequence = 0)`，
-头文件 `parser/packet_parser.h`。CMake 目标 `flowguard_parser` 不链接 Qt/Npcap。
-函数只读输入，返回独立的 `PacketRecord`，没有全局可变状态，可在采集线程或离线读取流程调用。
-调用者负责递增序号；时间戳和两个长度原样传递。
+唯一公共声明来自 `src/core/module_contracts.h`，模块入口头文件为 `parser/packet_parser.h`：
+
+```cpp
+ParsedPacket parsePacket(const RawPacket& packet, std::uint64_t sequence);
+```
+
+函数无状态、只读输入，不保留原始字节。调用者传递会话序号，结果的 `record` 保留时间、长度、
+协议分类与可选字段，`fields` 是可供 Qt 主窗口直接展开的字段树。不要再按旧版 `PacketRecord` 返回值调用。
 
 ```cpp
 #include "parser/packet_parser.h"
-auto record = flowguard::parsePacket(rawPacket, sequence);
-// 先检查 record.status，再使用可选字段；异常包也可保留已读出的字段。
+auto parsed = flowguard::parsePacket(rawPacket, sequence);
+const auto& record = parsed.record;
+// 检查 record.status 后使用字段；异常包仍可能有安全取得的部分字段。
+// parsed.fields 供界面展示，不需要保留 RawPacket。
 ```
 
-## 当前范围
+## 已实现范围
 
-- Ethernet II：源/目的 MAC、最终 EtherType；支持 802.1Q/802.1ad VLAN，最多八层标签。
-- IPv4：地址、版本、TTL、协议号，验证 IHL、总长度，跳过选项。
-- IPv6：地址、版本、Hop Limit；遍历 Hop-by-Hop、Routing、Destination、Fragment、AH 扩展头。
-  `ipProtocol` 保存扩展头之后的协议号。IPv6 字符串使用八组十六进制，未做零压缩。
-- TCP：端口、标志、data offset 和选项长度；UDP：端口和 UDP 长度。
-- Ethernet/IPv4 ARP：请求/响应的 IP 地址，opcode 放在 summary。
-- DNS：仅候选端口 53；校验 DNS 头、问题名、压缩指针、各区记录边界后才设置 `isDns`。
-  不仅凭端口确认 DNS。TCP 要求单段内恰好一个有两字节长度前缀的完整消息。
+- Ethernet II：小写冒号 MAC、最终 EtherType；802.1Q/802.1ad 最多两层 VLAN。
+- IPv4：点分地址、版本、TTL、协议、IHL/总长度检查，跳过选项。
+- IPv6：压缩小写文本地址、Hop Limit；安全跳过最多八个 Hop-by-Hop、Routing、Destination、Fragment、AH 扩展头。
+- TCP：端口、data offset/选项长度、原始 flags；UDP：端口、长度及内层边界。
+- ARP：Ethernet/IPv4 格式，源/目标 IP、opcode；字段树包含发送/目标 MAC 和 IP。
+- DNS：候选端口 53，校验头、问题和所有区记录边界、压缩指针（最多 16 次，必须回指）后才置 `isDns`。
+  TCP 识别本段第一条完整的有两字节长度前缀消息，允许后续消息，不跨段重组。
+  字段树展示事务 ID、flags、各区数量及首个问题名、类型和类别。
 - ICMP/ICMPv6：基础分类和最小四字节头检查。
+- 字段树按 Ethernet、VLAN、网络、传输、DNS 顺序排列；展开 TCP 标志。固定有限树形，
+  不批量展开 DNS 资源记录或载荷；最终再检查节点 256、文本 16 KiB、深度 16 的预算。
 
 ## 状态与限制
 
-- `Complete` 表示上述支持范围内的结构检查通过，不代表校验和或全部协议语义有效。
-- `Truncated` 表示所需字节不可用，包括抓包截断和 DNS 内部声明的字段超出可用数据。
-- `Malformed` 表示元数据矛盾、IP/TCP/UDP 长度不合法、版本不一致或 DNS 名称格式不合法。
-- `Unsupported` 表示未知链路/协议、非支持的 ARP、需要重组的分片或 TCP DNS 流。
-  首片在头完整时可提供端口；后续分片不将数据误读为端口。不会把分片标为完整解析。
+优先级为 `Malformed > Truncated > Unsupported > Complete`。先验证元数据；只根据安全读出的内容判断。
+`capturedLength < originalLength` 至少为 Truncated，即使仅缺少以太网填充；明确长度矛盾仍为 Malformed。
+DNS 结构缺字节为 Truncated，非法标志/名称或声明长度矛盾为 Malformed。
 
-不做 IP 分片或 TCP 流重组、校验和验证、IPv6 jumbogram、ESP 解密、DNS RDATA 语义解码。
-不保留 DNS 问题名/资源记录详情，也不新增 ARP 专用字段；当前公共结构提供地址、分类和摘要。
-DNS TC 标志本身是有效协议字段，但如果记录字节不完整，仍不标记 `isDns`。
-忽略 IP 数据报之外的以太网填充；UDP 长度限定 DNS 解析边界。
+不做 IP/TCP 重组。实际分片保留网络字段和可确定的协议分类，标为 Unsupported，不猜测端口；IPv6 原子分片正常继续。
+未知 DLT、ESP、未知协议、超出支持的 VLAN/扩展层数均为 Unsupported。
+不做校验和验证、IPv6 jumbogram、DNS RDATA 语义解码。Complete 不代表全部协议语义或校验和有效。
 
-## 测试与亲自检查
+## 从源码到验收
 
-在仓库根目录的 MSVC x64 开发终端中，按主 README 配置本机依赖后：
+CMake 将解析源码编译为 `flowguard_parser` 静态库，分别链接到程序和测试。
+解析库不链接 Qt/Npcap；离线程序将 `flowguard_storage` 的原始包交给同一解析入口。
+在仓库根目录的 MSVC x64 开发终端中，按根 README 配置本机依赖后：
 
 ```powershell
 cmake --build --preset windows-msvc
-ctest --test-dir build/windows-msvc -R packet_parser --output-on-failure --no-tests=error
-.\build\windows-msvc\packet_parser_tests.exe
+ctest --test-dir build/windows-msvc -R 'packet_parser|pcap_reader|offline_parser_fixture' --output-on-failure --no-tests=error
+.\build\windows-msvc\flowguard_offline_probe.exe .\tests\data\ethernet-ipv4-udp.pcap
 ```
 
-CMake 把解析源码编译为静态库，再链接到程序和测试可执行文件；CTest 运行测试程序并检查退出码。
-此测试可执行文件不需要 Qt/Npcap DLL。完整 CTest 包含窗口测试，仍需 README 中的运行环境。
+最后一条应显示 Packet 1、length=42、status=Complete，字段树中源 IP `192.0.0.1`、目的 IP `10.0.0.2`、
+源端口 1234、目的端口 80。该程序也接受自己的经典 PCAP 路径（支持中文路径），不会修改文件。
+可在 `parsePacket` 设置断点，观察 `parsed.record` 与 `parsed.fields`，再用短包测试观察状态变化。
 
-样本在 `tests/packet_parser_tests.cpp` 中构造，字节序明确、可重复、不含个人抓包数据。
-可在 `parsePacket` 设置断点，以 IPv4 UDP 样本观察：源地址 `192.0.0.1`、目的地址 `10.0.0.2`、
-源端口 `1234`、目的端口 `80`；再看截断循环中 status 如何变成 `Truncated`。
-修改一个预期值再运行测试，可以确认测试会报 FAILED 并以非零退出；之后撤销修改。
+完整 CTest 还包含窗口、采集及真实回环测试，需要 Qt/Npcap 的运行环境；Npcap 仅管理员模式可能需要管理员终端。
+真实回环测试仅向本机生成 UDP：实际 DLT 为 1 时校验 UDP 端口，否则校验明确返回 Unsupported。
+本机实际回环 DLT 为 0，因此该测试证明接口交接和不误解析，并不代替真实 Ethernet 解析/Wireshark 对照。
 
-真实 Npcap 采集、PCAP 文件读取、界面展示和 Wireshark 对照尚未接入，应在双方共同联调时验收。
+项目测试保存在 tests：可选 TShark 对照通过 CMake 缓存项 FLOWGUARD_TSHARK_EXECUTABLE 启用；Python 仅供该项测试使用。
+现已完成真实 WLAN DLT=1 的 IPv4/IPv6 UDP 采集解析与 TShark 对照，主窗口不属于任务书截图中本次解析职责。
+新增 live_parse_probe 用队友 CaptureSession 实际取包并调用同一解析入口；PCAP 证据输出最多 256 包，拒绝覆盖。
+离线程序支持 `--json` 输出基本字段、捕获长度、时间和树，供独立工具逐字段比较。
+18 包固定协议集与 TShark 的 312 字段比较已通过；真实 8 包 128 字段比较及在线/离线一致性已通过。
+助手自查完成，待用户最终验收，尚未新增提交。

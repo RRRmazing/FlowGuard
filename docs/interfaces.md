@@ -1,6 +1,18 @@
 # FlowGuard 公共开发接口文档 v1.0
 
-更新日期：2026-11-21。源码基线：`main` / `3dcb4d67ba543df5539c61fa9e93195c9015d02b`。
+更新日期：2026-11-21。原始设计源码基线：`main` / `3dcb4d67ba543df5539c61fa9e93195c9015d02b`。
+
+后续实现状态（`feat/capture`）：公共声明头文件已在 `44ecf65` 落地；当前分支已实现
+`enumerateDevices()`、CaptureSession（实际采集、BPF 应用、线程、有界队列和生命周期）与命令行验证程序，通过单元测试、真实回环测试及 Wi-Fi 实机抓包。解析、文件读写、统计和完整 UI 等仍为待实现合同。双方须取得该分支的
+公共头文件提交，或由本人将其 cherry-pick 到自己的功能分支；不据此自动合并 main。
+
+当前 `feat/parser` 工作树已合入 `origin/feat/capture` 的 `5c50b0d`（待验收提交），
+使用同一公共头文件实现 `ParsedPacket parsePacket(...)` 与 `PcapReader`，包含受限字段树和离线命令行查看。
+PcapReader 仅增加私有 Impl 指针，公开签名未改变；集成负责人须审查该头文件及 CMake 的新增目标。
+PcapWriter、统计、过滤、资源监控和完整主窗口集成仍未实现。解析模块用法见 `src/parser/README.md`。
+当前解析模块另已完成18包TShark独立对照、真实WLAN Ethernet的IPv4/IPv6 UDP解析及在线/离线一致性验证；
+任务书阶段1谢福祥全部实现项与助手自查已完成，最终用户验收待确认。调用与测试说明见 `src/parser/README.md`。
+
 
 供何俊杰、谢福祥及双方使用的 AI 共同开发、代码审查和联调使用。职责依据《网络流量检测课程设计任务书_最终整合版.docx》的“阶段职责分配”；代码与构建依据本基线的 README、CMake 配置、公共头文件和阶段指南。
 
@@ -13,10 +25,10 @@
 | C++17、Qt Widgets、Npcap、CMake、MSVC x64 | 阶段 0 已建立，见根目录 README 和 CMakeLists.txt |
 | `RawPacket`、`PacketRecord` 与三个协议/状态枚举 | 已存在于 `src/core/packet_types.h`，本次不改变其字段或枚举值 |
 | 构建、依赖加载和窗口启动 | 本机已验收，记录在 `docs/acceptance/2026-11-21-hejunjie/`；不代表采集、解析等功能已完成 |
-| 本文第 4 节函数、扩展类型和 Qt 交接规则 | 本次新增的待实现开发合同，目前尚不存在相应功能代码 |
+| 本文第 4 节函数、扩展类型和 Qt 交接规则 | 已落地公共声明及枚举/CaptureSession；其他模块仍待实现，Qt 交接规则仍是设计约定 |
 | 队列容量、刷新周期、历史上限等 | 为合作开发选定的 v1 可调默认值，尚非性能测试结论 |
 
-本次交付是文档，不宣称已实现以下接口。后续实现时先提交公共头文件，再分别开发模块。
+本文区分接口合同与实际实现；有声明不等于有实现。公共头文件已先行提交，后续分别开发模块。
 双方应使用本文的同名类型和方法；调整签名、所有权或统计含义时，必须同步修改本文与调用方。
 
 Qt 继续用于主窗口、控件、图表、信号/槽和界面刷新。核心数据及解析/统计接口使用标准 C++，便于离线测试；这不改变整个项目使用 Qt 的技术路线。图表实现前按 README 补齐同套件 Qt Charts，并在 CMake 中增加相应依赖。
@@ -40,7 +52,7 @@ BPF 由谢福祥提供输入配置与过滤测试，何俊杰在采集层编译�
 ### 1.3 版本同步规则
 
 - 功能分支从最新 `main` 创建：采集使用 `feat/capture`，解析使用 `feat/parser`；存储、统计、图表分别使用对应的 `feat/*` 分支。
-- 公共头文件先合入共同基线，双方再更新分支实现。代码未推送前，聊天中的文档不能代替队友仓库中的版本。
+- 公共头文件先以独立提交共享，双方更新自己的功能分支后实现；当前不直接提交或合并 main。代码未推送前，聊天中的文档不能代替队友仓库中的版本。
 - 每次交接注明 commit、模块、接口版本、已实现/未实现方法、运行命令和真实测试结果。
 - 本次文档不自动提交或推送；共享前只暂存明确检查过的文件。当前残留的个人 `local-env.cmd` 不再被新版 Git 忽略，不能提交。
 - 按最新 README 使用标准 CMake/CTest；旧 `scripts/build.cmd`、`run.cmd`、`test.cmd` 等已删除，不作为后续运行入口。
@@ -101,7 +113,7 @@ PCAP 导入 ──PcapReader::readNext──────────────
 
 ## 4. 待实现的公共接口
 
-下方是可共同采用的声明合同，不是现有功能实现。公共声明依次落入 `src/core/module_contracts.h`；各模块自己的头文件包含它，不复制声明。现有 `packet_types.h` 保持不变。
+下方是共同采用的声明合同，不表示每个方法均已实现。公共声明已落入 `src/core/module_contracts.h`；各模块自己的头文件包含它，不复制声明。现有 `packet_types.h` 保持不变。
 
 预期的设备、文件和输入错误使用 OperationResult/ParseStatus 表达；资源已取得后发生失败须释放。后台线程入口捕获未预期异常并转换为会话错误，禁止异常直接逃逸线程造成进程退出。
 
@@ -114,6 +126,7 @@ PCAP 导入 ──PcapReader::readNext──────────────
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <memory>
 
 namespace flowguard {
 
@@ -171,7 +184,9 @@ public:
     void stop();
     bool tryPop(RawPacket& packet);
     CaptureStatus status() const;
-    // 具体私有成员由实现者补充；不暴露 pcap_t 或内部队列。
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 struct ProtocolField {
@@ -276,6 +291,8 @@ ResourceSample sampleResources();
 - `stop` 可重复调用，返回前采集线程退出、设备已释放。它保留剩余队列供处理线程排空；集成层排空后才能结束旧会话。
 - 致命读取错误使状态变为 `Failed` 并记录错误，释放设备；之后仍允许排空已入队数据。析构必须安全停止。
 - BPF 在新采集会话开始前生效；运行中修改需要停止并重新开始。错误表达式返回 `FilterError`，不能悄悄退回“全部采集”。
+- 当前实现通过 Npcap 非阻塞模式和可唤醒的 10 ms 等待实现有界停止，不依赖无流量时的驱动读取超时；应用层控制方法仍须串行调用。快照长度校验范围为 1..16 MiB，队列两类容量、读取超时必须为正。
+- CaptureSession 使用私有 Impl 指针，不改变公开方法签名。队友应同步新版完整头文件并重新构建，不能混用旧版类布局与新版采集库。
 
 ### 4.2 解析范围与字段树
 
@@ -327,7 +344,7 @@ ResourceSample sampleResources();
 
 ### 5.1 当前两边马上做什么
 
-1. 何俊杰将本文和公共声明头文件纳入共同开发基线（本次仅完成本文；头文件是下一项实现任务），通知谢福祥对应 commit。双方确认使用相同版本后开工。
+1. 何俊杰将本文和公共声明头文件以功能分支提交共享，通知谢福祥公共头文件 commit `44ecf65`。双方确认使用相同版本后开工；main 的合并另行共同确认。
 2. 何俊杰实现 enumerateDevices、CaptureSession 和采集测试；谢福祥同时实现固定样本、parsePacket、PcapReader 基础读取及解析测试。解析不等待真实采集，采集不依赖 Qt 报文列表。
 3. 第一轮联调完成“真实网卡 → RawPacket → ParsedPacket → 简易列表”，对照固定 PCAP 与 Wireshark 检查字段，保留真实结果。
 4. 下一轮分别补统计、保存回放和 Qt 图表/过滤/监控，每完成一个模块就接入。双方讲解关键代码并检查差异后合并。
@@ -383,3 +400,5 @@ ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 | --- | --- |
 | 阶段 0 原文 | 仅有 RawPacket/PacketRecord 数据契约与基本原则 |
 | v1.0 / 2026-11-21 | 以 3dcb4d6 为源码基线，保留已有数据类型；增加待实现模块合同、负责人、Qt 交接、资源边界、统计/过滤口径与联调标准；本次未实现功能代码 |
+| v1.0 落地 / 2026-11-21 | feat/capture 的 44ecf65 提供公共头文件；随后实现枚举、命令行验证与测试，其他模块仍待实现；不改动远程 main |
+| 采集实现 / 2026-11-21 | 完成任务书网络底层阶段何俊杰的 CaptureSession、BPF 应用、线程、有界队列和实际抓包验证；公开签名不变，类增加私有 Impl；未实现队友模块 |
