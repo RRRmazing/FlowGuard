@@ -1,6 +1,8 @@
 # FlowGuard 流量哨兵
 
-计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。当前为阶段 0 工程骨架，尚未实现报文采集、解析、统计与回放。
+计算机网络课程设计，采用 C++17、Qt Widgets 和 Npcap。阶段 0 工程骨架已建立；
+当前 `feat/capture` 分支已完成公共模块声明、网卡枚举、实际采集、开始/停止/重启、
+BPF 应用、后台线程和有界队列，提供命令行验证程序。当前分支同时接入解析、字段树与 PCAP 基础读取；统计、PCAP 保存和回放控制仍待实现。
 
 ## 开发依赖
 
@@ -76,9 +78,23 @@ $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtRoot\plugins\platforms"
 ctest --test-dir build/windows-msvc --output-on-failure --no-tests=error
 ```
 
-CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出。
+CTest 当前包含 `stage0_smoke` 和五项 `capture_*` 测试：前者加载实际的
+Qt/Npcap 库，启动窗口并进入事件循环，检查后自动退出；后者验证设备信息转换、
+资源释放、命令行参数、并发队列和采集生命周期；`capture_loopback_live` 会打开
+Npcap 回环设备并收发本机自产 UDP 流量。无回环设备时该项明确跳过，不能视为实机验证通过。
+公共头文件还有独立编译检查目标。新增解析与读取测试见 [解析说明](src/parser/README.md) 和 [读取说明](src/storage/README.md)。
 预期结果为 `100% tests passed`。这不能替代人工查看中文显示、窗口操作和退出是否正常。
 队友也应在自己的电脑上配置、构建和运行，确认工程能独立复现。
+
+只验证采集基础而不启动窗口时：
+
+```powershell
+ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-tests=error
+.\build\windows-msvc\flowguard_capture_probe.exe --list-devices
+```
+
+这里的命令行程序仅依赖 Npcap 和系统库，不依赖 Qt DLL；枚举模式输出网卡设备标识、
+说明、IPv4/IPv6 地址和回环标记。详细行为见 [采集模块说明](src/capture/README.md)。
 
 最终交付前还需要单独部署和验证运行库。Qt 提供 `windeployqt` 工具；
 开发终端可以运行程序，并不代表单独复制一个 exe 就能在另一台电脑运行。
@@ -89,11 +105,11 @@ CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口�
 | --- | --- |
 | `CMakeLists.txt` | 源码、依赖与测试定义 |
 | `CMakePresets.json` | 共享构建选项 |
-| `src/core` | 原始报文和解析结果数据结构 |
-| `src/capture` | 后续采集、线程与有界缓冲 |
-| `src/parser` | 后续协议解析 |
+| `src/core` | 原始报文、解析结果及公共模块接口声明 |
+| `src/capture` | 已实现枚举、实际采集、线程、有界缓冲与命令行验证 |
+| `src/parser` | 协议解析、字段树和固定样本测试 |
 | `src/statistics` | 后续统计计算 |
-| `src/storage` | 后续 PCAP 读写 |
+| `src/storage` | 经典 PCAP 基础读取；保存待实现 |
 | `src/ui` | 窗口与显示 |
 | `tests/data` | 可重复验证的报文样本 |
 | `docs` | 阶段记录和接口约定 |
@@ -106,3 +122,9 @@ CTest 当前只有 `stage0_smoke`：加载实际的 Qt/Npcap 库，启动窗口�
 保留各自正常的 Git 作者身份，功能分支通过审查和验收后合并到 main。
 
 阶段指南见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
+
+## 谢福祥阶段 1 交付
+
+任务书阶段1中的解析、关键字段、ARP/DNS、异常边界、单元测试和真实Ethernet集成验证已实现并完成助手自查，待用户最终验收。
+标准构建与测试见上文，解析接口和离线工具用法见 [解析模块说明](src/parser/README.md)。
+当前含18包固定协议集的独立TShark对照，以及真实WLAN的IPv4/IPv6 UDP验证证据。
