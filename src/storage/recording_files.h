@@ -6,7 +6,8 @@ namespace flowguard {
 class RecordingFiles {
 public:
     static QString configurationFile();
-    static void useConfigurationFile(const QString& file); // Set before windows/workers start; tests own this file.
+    static void useConfigurationFile(const QString& file, const QString& legacyPortable = {}, const QString& legacyUser = {}); // Tests use only owned files.
+    static QString initialize(); // Migrate old choices and prepare fresh defaults; empty on success.
     static QString logDirectory();
     static bool selectionConfirmed();
     static QString setDirectories(const QString& logs,const QString& packets);

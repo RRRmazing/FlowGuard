@@ -1,3 +1,4 @@
+#include "storage/recording_files.h"
 #include "ui/main_window.h"
 #include "ui/alert_panel.h"
 #include <QTemporaryDir>
@@ -16,6 +17,7 @@ int main(int argc,char** argv){
     QTemporaryDir logs(QDir::currentPath()+"/alert-gui-logs-XXXXXX");
     check(logs.isValid(),"create writable test log directory");
     qputenv("FLOWGUARD_LOG_ROOT",logs.path().toUtf8());qputenv("FLOWGUARD_ACCEPTANCE","1");
+    flowguard::RecordingFiles::useConfigurationFile(logs.path()+"/settings/storage.ini");
     {
         AlertPanel panel;
         AlertSnapshot ended;ended.sessionId=1;ended.file=true;ended.finished=true;ended.paused=true;

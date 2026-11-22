@@ -1,3 +1,4 @@
+#include "storage/recording_files.h"
 // Primary author: Xie Fuxiang. AI-assisted integration tests, pending user review.
 #include "core/module_contracts.h"
 #include "ui/chart_panel.h"
@@ -236,6 +237,7 @@ int main(int argc, char **argv)
     const QString evidenceRoot = qEnvironmentVariable("FLOWGUARD_LOG_ROOT", temp.path());
     qputenv("FLOWGUARD_LOG_ROOT", evidenceRoot.toUtf8());
     qputenv("FLOWGUARD_ACCEPTANCE", "1");
+    flowguard::RecordingFiles::useConfigurationFile(temp.path()+"/settings/storage.ini");
     {
         flowguard::MainWindow w("integration-test");
         w.show();
@@ -400,8 +402,8 @@ int main(int argc, char **argv)
         w.startDevice("\\Device\\NPF_Loopback", QString("udp and dst port %1").arg(port));
         check(wait([&] { return button(w, QStringLiteral("停止"))->isEnabled(); }), "GUI live capture started");
         check(!button(w, QStringLiteral("开始采集"))->isEnabled(), "start disabled while capturing");
-        check(storageAction && !storageAction->isEnabled(),
-              "storage settings locked during capture to preserve run evidence");
+        check(storageAction && storageAction->isEnabled(),
+              "storage destination can be corrected during capture when no segment is recording");
         check(snaplen && !snaplen->isEnabled(), "snapshot length locked while capturing");
         QUdpSocket sender;
         for (int i = 0; i < 10; ++i)

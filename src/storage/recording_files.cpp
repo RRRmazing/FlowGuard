@@ -7,11 +7,15 @@
 #include <QCoreApplication>
 #include <QTemporaryFile>
 #include <QStorageInfo>
+#include <QStandardPaths>
+#include <QStringList>
+#include <memory>
 #include <QUuid>
 #include <filesystem>
 namespace flowguard {
 namespace {
 QString configurationOverride;
+QString legacyPortableOverride, legacyUserOverride;
 QString persistDirectories(const QString *logs,const QString *packets) {
     const auto file=RecordingFiles::configurationFile();
     if(!QDir().mkpath(QFileInfo(file).absolutePath()))
@@ -25,10 +29,54 @@ QString persistDirectories(const QString *logs,const QString *packets) {
 }
 }
 QString RecordingFiles::configurationFile() {
-    return configurationOverride.isEmpty()?QCoreApplication::applicationDirPath()+"/data/storage.ini":configurationOverride;
+    return configurationOverride.isEmpty()?QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("FlowGuard/storage.ini"):configurationOverride;
 }
-void RecordingFiles::useConfigurationFile(const QString& file) {
+void RecordingFiles::useConfigurationFile(const QString& file,const QString& legacyPortable,const QString& legacyUser) {
     configurationOverride=file.isEmpty()?QString():QFileInfo(file).absoluteFilePath();
+    legacyPortableOverride=legacyPortable;legacyUserOverride=legacyUser;
+}
+QString RecordingFiles::initialize() {
+    const auto config=configurationFile();
+    if(!QDir().mkpath(QFileInfo(config).absolutePath())) return QStringLiteral("无法创建用户配置目录：")+QFileInfo(config).absolutePath();
+    QSettings settings(config,QSettings::IniFormat);
+    const auto portableFile=configurationOverride.isEmpty()?QCoreApplication::applicationDirPath()+"/data/storage.ini":legacyPortableOverride;
+    std::unique_ptr<QSettings> portable,user;
+    if(!portableFile.isEmpty() && QFileInfo::exists(portableFile)) portable=std::make_unique<QSettings>(portableFile,QSettings::IniFormat);
+    if(configurationOverride.isEmpty()) user=std::make_unique<QSettings>(QSettings::NativeFormat,QSettings::UserScope,"FlowGuard","FlowGuard");
+    else if(!legacyUserOverride.isEmpty()) user=std::make_unique<QSettings>(legacyUserOverride,QSettings::IniFormat);
+    if(user) user->setFallbacksEnabled(false);
+    // Test overrides keep all data inside the owned temporary directory.
+    const auto root=configurationOverride.isEmpty()?QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).filePath("FlowGuard")
+        :QDir(QFileInfo(config).absolutePath()).filePath("FlowGuard-Data");
+    QStringList problems;
+    auto prepareChoice=[&](const QString& key,const QString& folder) {
+        bool fresh=false;
+        if(!settings.contains(key)) {
+            QVariant old;
+            if(key=="captureDirectory" && settings.contains("pcap/defaultDirectory")) old=settings.value("pcap/defaultDirectory");
+            if(!old.isValid() && portable) {
+                if(portable->contains(key)) old=portable->value(key);
+                else if(key=="captureDirectory" && portable->contains("pcap/defaultDirectory")) old=portable->value("pcap/defaultDirectory");
+            }
+            if(!old.isValid() && key=="captureDirectory" && user && user->contains("pcap/defaultDirectory")) old=user->value("pcap/defaultDirectory");
+            // Preserve the old implicit log directory only when it actually exists.
+            const auto previousLogs=QCoreApplication::applicationDirPath()+"/data/runs";
+            if(!old.isValid() && key=="logRoot" && configurationOverride.isEmpty() && QFileInfo(previousLogs).isDir()) old=previousLogs;
+            fresh=!old.isValid();
+            settings.setValue(key,fresh?QDir(root).filePath(folder):old.toString());
+        }
+        const auto directory=settings.value(key).toString().trimmed();
+        // An explicitly empty setting remains disabled; missing custom paths are never recreated.
+        if(!directory.isEmpty()) {
+            const auto problem=validateDirectory(directory,fresh);
+            if(!problem.isEmpty()) problems << problem;
+        }
+    };
+    prepareChoice("logRoot","Logs");prepareChoice("captureDirectory","Captures");
+    settings.remove("pcap/defaultDirectory");
+    settings.sync();
+    if(settings.status()!=QSettings::NoError) problems << QStringLiteral("无法保存用户配置：")+config;
+    return problems.join('\n');
 }
 QString RecordingFiles::logDirectory() {
     QSettings settings(configurationFile(),QSettings::IniFormat);

@@ -149,6 +149,8 @@ struct MainWindow::Impl
     QTableView *table = nullptr;
     QTreeWidget *tree = nullptr;
     QTextBrowser *summary = nullptr;
+    QLabel *detailContext = nullptr;
+    std::uint64_t detailSequence = 0;
     ChartPanel *charts = nullptr;
     QChartView *cpuView = nullptr, *memoryView = nullptr;
     QStackedWidget *pages = nullptr;
@@ -197,9 +199,10 @@ struct MainWindow::Impl
     }
     explicit Impl(MainWindow *window) : w(window), poll(new QTimer(window)), second(new QTimer(window))
     {
+        controlError=RecordingFiles::initialize();
         logRoot=RecordingFiles::logDirectory();
         pcapRoot=RecordingFiles::defaultDirectory();
-        storagePromptPending=(!RecordingFiles::selectionConfirmed() && (logRoot.isEmpty() || pcapRoot.isEmpty())) ||
+        storagePromptPending=!RecordingFiles::selectionConfirmed() ||
             (!logRoot.isEmpty() && !RecordingFiles::validateDirectory(logRoot).isEmpty()) ||
             (!pcapRoot.isEmpty() && !RecordingFiles::validateDirectory(pcapRoot).isEmpty());
         uptime.start();
@@ -276,7 +279,7 @@ struct MainWindow::Impl
         for (auto *widget : std::initializer_list<QWidget *>{protocol,ip,port,filterApply,filterReset})
             widget->setEnabled(!blocked);
         follow->setEnabled(!fileComplete && !blocked);
-        if(storageAction) storageAction->setEnabled(idle);
+        if(storageAction) storageAction->setEnabled(!blocked && stagingPath.isEmpty() && !snapshot.savingActive && !snapshot.savingRequested);
         if(openLogFolder) openLogFolder->setEnabled(!recordPath.isEmpty() && QFileInfo(recordPath).isDir());
         for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snapshotControl})
             widget->setEnabled(idle);
@@ -295,7 +298,7 @@ struct MainWindow::Impl
             saveArmed ? QStringLiteral("取消保存等待") :
             (!stagingPath.isEmpty() || snapshot.savingActive || snapshot.savingRequested) ? QStringLiteral("结束保存") : QStringLiteral("开始保存报文"));
         save->setToolTip(fileMode ? QStringLiteral("PCAP 文件分析不提供保存。点击“开始采集”后，可选择从第一包开始保存。") :
-            stagingPath.isEmpty() ? QStringLiteral("请在采集前选好目录。当前目录：%1；结束时确认文件名和位置。")
+            stagingPath.isEmpty() ? QStringLiteral("当前目录：%1；可在采集中途开始保存，结束时确认文件名和位置。")
                 .arg(pcapRoot.isEmpty()?QStringLiteral("尚未选择"):QDir::toNativeSeparators(pcapRoot)) : stagingPath);
         if(saveState) saveState->setText(finishingSave ? QStringLiteral("正在结束报文保存") : saveArmed ? QStringLiteral("等待采集") :
             snapshot.savingActive ? QStringLiteral("报文保存中") :
@@ -378,7 +381,7 @@ struct MainWindow::Impl
             problem=RecordingFiles::validateDirectory(directory);
         }
         if(!problem.isEmpty()) {
-            controlError=problem+QStringLiteral("\n请在采集前选择报文目录；不会自动改用其他位置。");updateControls();return false;
+            controlError=problem+QStringLiteral("\n请在“保存设置”中选择有效的报文目录；不会自动改用其他位置。");updateControls();return false;
         }
         pcapRoot=directory;return true;
     }
@@ -395,7 +398,7 @@ struct MainWindow::Impl
         if(!stagingPath.isEmpty()) {finishRecording();return;}
         if(snapshot.savingActive || snapshot.savingRequested) {command("finish_saving",[this]{return backend.finishSaving();});return;}
         recordingNotice.clear();
-        if(!ensureRecordingDirectory(!active())) return;
+        if(!ensureRecordingDirectory(true)) return;
         if(!active()) {saveArmed=true;updateControls();return;}
         QString problem;
         stagingPath=RecordingFiles::prepare(RecordingFiles::defaultDirectory(),problem);
@@ -446,7 +449,7 @@ struct MainWindow::Impl
     }
     void chooseStorage()
     {
-        if (active() || busy || closing || finishingSave) return;
+        if (busy || closing || finishingSave || !stagingPath.isEmpty() || snapshot.savingActive || snapshot.savingRequested) return;
         const auto captureDirectory=RecordingFiles::defaultDirectory();
         QDialog dialog(w);
         dialog.setWindowTitle(QStringLiteral("选择数据保存位置"));
@@ -471,7 +474,7 @@ struct MainWindow::Impl
         auto *captures = directoryRow(QStringLiteral("PCAP 记录和最终保存目录"), captureDirectory);
         logs->setObjectName("storageLogRoot");
         captures->setObjectName("storageCaptureDirectory");
-        auto *notice = new QLabel(QStringLiteral("请自行选择目录，不预设盘符或系统位置；留空表示不启用该项。首次选择日志目录立即开始记录，之后修改在下次启动生效。PCAP目录必须在采集前选好；采集中开启保存不会再弹路径窗口。"));
+        auto *notice = new QLabel(QStringLiteral("默认数据位于用户文档目录的 FlowGuard 文件夹，与程序安装目录分开；可修改到其他磁盘。留空表示不启用该项。首次启用日志立即记录，之后修改下次启动生效。采集中也可设置报文目录并开始保存；结束时再确认文件名和位置。"));
         notice->setWordWrap(true); form->addRow(notice);
         auto *status = new QLabel; status->setWordWrap(true); form->addRow(status);
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
@@ -545,7 +548,7 @@ struct MainWindow::Impl
                 if (!result.ok()) return;
                 filePage=page.page; filePageCount=page.pageCount; fileMatched=page.matchedPackets;
                 model->clear(); model->filter(displayFilter); model->append(std::move(page.packets));
-                tree->clear(); summary->clear(); table->scrollToTop();
+                clearPacketDetails(); table->scrollToTop();
                 const QSignalBlocker blocker(filePageNumber);
                 filePageNumber->setRange(1,int(std::min<std::uint64_t>(filePageCount,std::numeric_limits<int>::max())));
                 filePageNumber->setValue(int(filePage+1));
@@ -588,11 +591,15 @@ struct MainWindow::Impl
         controlError.clear();
         displayFilter=f;
         model->filter(f);
-        tree->clear();
-        summary->clear();
+        clearPacketDetails();
         updateControls();
         if (snapshot.source==ProcessingSource::File && snapshot.state==ProcessingState::Completed)
             loadFilePage(0,true);
+    }
+    void clearPacketDetails()
+    {
+        detailSequence=0;
+        tree->clear();summary->clear();detailContext->clear();
     }
     void showPacket(int row)
     {
@@ -600,9 +607,11 @@ struct MainWindow::Impl
         const auto *p = model->packet(row);
         if (!p)
         {
-            summary->clear();
+            clearPacketDetails();
             return;
         }
+        detailSequence=p->record.sequence;
+        detailContext->setText(QStringLiteral("当前解读：报文 #%1").arg(detailSequence));
         fields(tree->invisibleRootItem(), p->fields);
         tree->expandAll();
         const auto &r = p->record;
@@ -645,21 +654,21 @@ struct MainWindow::Impl
         {
             filePageReady=false; filePage=0; filePageCount=1; fileMatched=0;
             model->clear();
-            tree->clear();
-            summary->clear();
+            clearPacketDetails();
             sessionClock.start();
             sessionStarted = QDateTime::currentDateTime();
             sessionElapsed = 0;
         }
         if (active() || old.state == ProcessingState::Running || old.state == ProcessingState::Paused)
             sessionElapsed = sessionClock.isValid() ? sessionClock.elapsed() : 0;
-        std::uint64_t selected = 0;
-        if (const auto *p = model->packet(table->currentIndex().row()))
-            selected = p->record.sequence;
+        const auto selected = detailSequence;
         auto batch = backend.takePackets();
         if (batch.sessionId == snapshot.sessionId && !batch.packets.empty() &&
             !(snapshot.source==ProcessingSource::File && (filePageReady || indexedFileSession==snapshot.sessionId)))
         {
+            // Restoring the same packet is not a user selection. Keep the document,
+            // text selection, scroll position and expanded field tree untouched.
+            const QSignalBlocker selectionBlocker(table->selectionModel());
             model->append(std::move(batch.packets));
             bool restored = false;
             for (int row = 0; row < model->rowCount(); ++row)
@@ -669,11 +678,8 @@ struct MainWindow::Impl
                     restored = true;
                     break;
                 }
-            if (!restored)
-            {
-                tree->clear();
-                summary->clear();
-            }
+            if (!restored && selected)
+                detailContext->setText(QStringLiteral("当前解读：报文 #%1（已移出实时列表，详情保留至选择其他报文）").arg(selected));
             if (follow->isChecked())
                 table->scrollToBottom();
         }
@@ -1031,7 +1037,16 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->summary->setLineWrapMode(QTextEdit::WidgetWidth);
     d->summary->document()->setDocumentMargin(12);
     d->summary->setMinimumWidth(280);
-    details->addWidget(d->summary);
+    auto *interpretation = new QWidget;
+    auto *interpretationLayout = new QVBoxLayout(interpretation);
+    interpretationLayout->setContentsMargins(0, 0, 0, 0);
+    d->detailContext = new QLabel;
+    d->detailContext->setObjectName("packetDetailContext");
+    d->detailContext->setTextFormat(Qt::PlainText);
+    d->detailContext->setWordWrap(true);
+    interpretationLayout->addWidget(d->detailContext);
+    interpretationLayout->addWidget(d->summary, 1);
+    details->addWidget(interpretation);
     details->setStretchFactor(0, 3);
     details->setStretchFactor(1, 2);
     details->setSizes({600, 400});

@@ -104,12 +104,48 @@ int main(int argc,char** argv) {
         check(readCount(answer)==initial&&files().empty(),"pre-armed recording contains every captured packet including first");
         check(button(QStringLiteral("停止"))->isEnabled(),"ending recording does not stop capture");
 
+        auto *liveTable=w.findChild<QTableView*>("packetTable");
+        auto *interpretation=w.findChild<QTextBrowser*>("packetSummary");
+        auto *detailContext=w.findChild<QLabel*>("packetDetailContext");
+        auto *fieldTree=w.findChild<QTreeWidget*>("protocolFields");
+        wait([&]{return liveTable&&liveTable->model()->rowCount()>0;},"live list ready for reading test");
+        liveTable->selectRow(0);
+        check(interpretation&&detailContext&&fieldTree,"live detail widgets available");
+        const auto detailBefore=interpretation->toPlainText();
+        interpretation->setMaximumHeight(80);QTest::qWait(30);
+        auto cursor=interpretation->textCursor();cursor.setPosition(0);cursor.movePosition(QTextCursor::Right,QTextCursor::KeepAnchor,6);
+        interpretation->setTextCursor(cursor);
+        interpretation->verticalScrollBar()->setValue(interpretation->verticalScrollBar()->maximum());
+        const auto selectedText=interpretation->textCursor().selectedText();
+        const auto scrollPosition=interpretation->verticalScrollBar()->value();
+        check(scrollPosition>0&&!selectedText.isEmpty(),"detail reading starts scrolled with selected text");
+        fieldTree->topLevelItem(0)->setExpanded(false);
         const auto unsavedBefore=w.totalPackets();send(8);wait([&]{return w.totalPackets()>=unsavedBefore+8;},"unsaved interval processed");
+        QTest::qWait(150);
+        check(interpretation->toPlainText()==detailBefore&&interpretation->textCursor().selectedText()==selectedText&&
+            interpretation->verticalScrollBar()->value()==scrollPosition&&!fieldTree->topLevelItem(0)->isExpanded(),
+            "incoming packets preserve interpretation text selection, scroll and collapsed fields");
+        check(RecordingFiles::setDirectories(RecordingFiles::logDirectory(),{}).isEmpty(),"simulate explicitly unset packet destination while capturing");
+        bool corrected=false;
+        QTimer::singleShot(0,&w,[&]{
+            auto *dialog=w.findChild<QDialog*>("storageLocationsDialog");
+            check(dialog!=nullptr,"live saving can select an unset directory without stopping capture");
+            dialog->findChild<QLineEdit*>("storageCaptureDirectory")->setText(folder);
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();corrected=true;
+        });
         save->click();wait([&]{return save->isEnabled()&&save->text()==QStringLiteral("结束保存");},"start large later-only recording");
+        check(corrected&&button(QStringLiteral("停止"))->isEnabled(),"directory correction did not stop the current capture");
         const auto largeBefore=w.totalPackets();bool sent=true;
         for(int i=0;i<2600;++i){sent=sender.writeDatagram("owned-large-recording",QHostAddress::LocalHost,receiver.localPort())>0&&sent;
             if(i%50==0)QTest::qWait(5);}
         check(sent,"send owned large localhost interval");wait([&]{return w.totalPackets()>=largeBefore+2600;},"large interval processed");
+        QTest::qWait(150);
+        check(detailContext->text().contains(QStringLiteral("已移出实时列表"))&&interpretation->toPlainText()==detailBefore&&
+            interpretation->textCursor().selectedText()==selectedText&&interpretation->verticalScrollBar()->value()==scrollPosition,
+            "evicting the selected packet preserves readable details with an explicit detached label");
+        liveTable->selectRow(0);
+        check(!detailContext->text().contains(QStringLiteral("已移出实时列表"))&&interpretation->verticalScrollBar()->value()==0&&
+            interpretation->textCursor().selectedText().isEmpty(),"explicit new packet selection resets reading state");
         const auto largeFile=owned.path()+"/later-2600.pcap";answer=largeFile;answerReady=true;save->click();
         wait([&]{return QFileInfo::exists(largeFile)&&save->isEnabled();},"large interval finalized");
         check(readCount(largeFile)==2600,"saved file contains all later packets beyond UI retention and excludes unsaved interval");
