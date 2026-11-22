@@ -1,4 +1,4 @@
-FlowGuard 0.1.0 - 课程项目预览版 / Course project preview
+FlowGuard 0.1.1 - 课程项目预览版 / Course project preview
 
 系统要求：Windows 10 1809 或更新的 x64 Windows。尚未验证 Windows on ARM。
 请先从 https://npcap.com/ 下载并安装 Npcap；本安装包不包含 Npcap 驱动或 DLL。

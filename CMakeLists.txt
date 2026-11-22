@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(FlowGuard VERSION 0.1.0 LANGUAGES CXX)
+project(FlowGuard VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,7 +55,7 @@ set_target_properties(flowguard_capture flowguard_capture_probe
     flowguard_contracts_check flowguard_capture_tests flowguard_session_tests flowguard_live_tests PROPERTIES
     AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 
-qt_add_executable(FlowGuard
+qt_add_executable(FlowGuard WIN32
     src/main.cpp
     src/ui/main_window.cpp
     src/ui/main_window.h

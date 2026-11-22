@@ -1,6 +1,6 @@
 # Third-party components
 
-FlowGuard 0.1.0 is distributed under GPL-3.0-only. Copyright remains with the respective contributors. This does not change the licenses of third-party components.
+FlowGuard is distributed under GPL-3.0-only. Copyright remains with the respective contributors. This does not change the licenses of third-party components.
 
 The Windows package dynamically links to unmodified Qt 6.11.0 (Qt Base, Qt Charts and Qt SVG, plus image plugins and translations). Qt Charts is available under GPL-3.0-only or commercial terms; this release uses its GPL terms. Qt Base/SVG components and their dependencies retain the license choices described in their included notices. License texts, available third-party notices, and the installed Qt SPDX bills of materials are included under `third-party-licenses`.
 

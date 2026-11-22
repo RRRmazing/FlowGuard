@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("FlowGuard"));
-    app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setApplicationVersion(QStringLiteral("0.1.1"));
 
     // Load Npcap before the first call to a delay-loaded pcap function.
     wchar_t systemDirectory[MAX_PATH] = {};

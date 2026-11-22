@@ -3,7 +3,7 @@
 ; Non-commercial use only.
 
 #define MyAppName "FlowGuard"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "xfx & hjj"
 #define MyAppURL "https://github.com/RRRmazing/FlowGuard"
 #define MyAppExeName "FlowGuard.exe"
