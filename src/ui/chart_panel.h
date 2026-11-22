@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QPointF>
 #include <QWidget>
+#include <QTableWidget>
 #include <QtCharts/QChartView>
 #include <array>
 
@@ -19,7 +20,11 @@ class ChartPanel final : public QWidget
   private:
     std::array<QChartView *, 8> views_{};
     QLabel *scope_ = nullptr;
+    QTableWidget *protocolTable_ = nullptr;
 };
 QChart *lineChart(const QString &, const QList<QPointF> &, const QString &, const QString &, const QColor &,
                   bool percent = false);
+QChartView *createInteractiveChartView(QWidget *parent = nullptr);
+// The view must be created by createInteractiveChartView().
+void replaceInteractiveChart(QChartView *, QChart *, const std::vector<TimeSample> &history = {});
 } // namespace flowguard

@@ -72,5 +72,23 @@ ReadStatus PcapReader::readNext(RawPacket& packet, OperationResult& result) {
     }
     packet=std::move(next); result={}; return ReadStatus::Packet;
 }
+std::optional<std::uint64_t> PcapReader::recordPosition() const {
+    if (!impl_->stream.is_open() || impl_->failed) return std::nullopt;
+    const auto p=impl_->stream.tellg();
+    if (p < std::streampos(24)) return std::nullopt;
+    return static_cast<std::uint64_t>(static_cast<std::streamoff>(p));
+}
+OperationResult PcapReader::seekRecord(std::uint64_t offset) {
+    auto& s=*impl_;
+    if (!s.stream.is_open() || offset<24 || offset>std::uint64_t(std::numeric_limits<std::streamoff>::max()))
+        return error(ErrorCode::InvalidArgument,"invalid PCAP record seek");
+    s.stream.clear(); s.stream.seekg(0,std::ios::end);
+    const auto end=s.stream.tellg();
+    if (end<std::streampos(24) || offset>std::uint64_t(static_cast<std::streamoff>(end)))
+        return error(ErrorCode::InvalidArgument,"PCAP record seek exceeds file");
+    s.stream.seekg(static_cast<std::streamoff>(offset));
+    if (!s.stream) return error(ErrorCode::IoError,"cannot seek PCAP record");
+    s.failed=false; return {};
+}
 void PcapReader::close() { if (impl_->stream.is_open()) impl_->stream.close(); impl_->stream.clear(); impl_->failed=false; impl_->info={}; }
 }

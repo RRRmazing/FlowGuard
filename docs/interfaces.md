@@ -253,6 +253,8 @@ public:
     OperationResult open(const std::filesystem::path& path);
     PcapFileInfo info() const;
     ReadStatus readNext(RawPacket& packet, OperationResult& result);
+    std::optional<std::uint64_t> recordPosition() const;
+    OperationResult seekRecord(std::uint64_t offset);
     void close();
 private:
     struct Impl;

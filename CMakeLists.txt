@@ -63,6 +63,8 @@ qt_add_executable(FlowGuard
 target_include_directories(FlowGuard PRIVATE src)
 target_link_libraries(FlowGuard PRIVATE Qt6::Widgets flowguard_capture)
 flowguard_configure_cpp(FlowGuard)
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:FlowGuard>/FlowGuard使用指南.html"
+    INPUT "${CMAKE_CURRENT_SOURCE_DIR}/docs/FlowGuard使用指南.html")
 
 enable_testing()
 add_test(NAME stage0_smoke COMMAND FlowGuard --smoke-test)
@@ -173,11 +175,16 @@ else()
 endif()
 configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 add_library(flowguard_ui_support STATIC
-    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp
+    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/pcap_pager.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp
     src/monitoring/resource_sampler.cpp src/monitoring/run_recorder.cpp)
 target_include_directories(flowguard_ui_support PUBLIC src PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(flowguard_ui_support PUBLIC flowguard_processing Qt6::Widgets Qt6::Network psapi iphlpapi)
 flowguard_configure_cpp(flowguard_ui_support)
+add_executable(flowguard_pcap_pager_tests tests/pcap_pager_tests.cpp)
+target_link_libraries(flowguard_pcap_pager_tests PRIVATE flowguard_ui_support)
+flowguard_configure_cpp(flowguard_pcap_pager_tests)
+add_test(NAME pcap_complete_paging COMMAND flowguard_pcap_pager_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
+set_tests_properties(pcap_complete_paging PROPERTIES TIMEOUT 30)
 target_sources(FlowGuard PRIVATE src/ui/chart_panel.cpp)
 target_link_libraries(FlowGuard PRIVATE flowguard_ui_support Qt6::Charts)
 qt_add_resources(FlowGuard icons PREFIX "/" BASE assets FILES assets/flowguard.png)
@@ -194,12 +201,24 @@ set_tests_properties(stage3_gui_file PROPERTIES TIMEOUT 20
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/acceptance-runs")
 find_package(Qt6 REQUIRED COMPONENTS Test)
 add_executable(flowguard_stage3_gui_tests tests/stage3_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
+set_target_properties(flowguard_stage3_gui_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gui-test-bin")
 target_link_libraries(flowguard_stage3_gui_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
 flowguard_configure_cpp(flowguard_stage3_gui_tests)
 add_test(NAME stage3_gui_integration COMMAND flowguard_stage3_gui_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
-set_tests_properties(stage3_gui_integration PROPERTIES TIMEOUT 40 LABELS "hardware" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(stage3_gui_integration PROPERTIES TIMEOUT 40 LABELS "hardware"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/gui-integration-runs")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME stage3_run_analysis COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_run_analysis.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
+
+# Local course-required acceptance additions: full header details.
+add_executable(flowguard_required_fields_tests tests/required_header_fields_tests.cpp)
+target_link_libraries(flowguard_required_fields_tests PRIVATE flowguard_parser flowguard_storage)
+flowguard_configure_cpp(flowguard_required_fields_tests)
+set_target_properties(flowguard_required_fields_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_test(NAME required_header_fields COMMAND flowguard_required_fields_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
+set_tests_properties(required_header_fields PROPERTIES TIMEOUT 30)

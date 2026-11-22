@@ -13,6 +13,9 @@ class MainWindow final : public QMainWindow
     void openFile(const QString &, bool paced = false, double speed = 1);
     void startDevice(const QString &, const QString &bpf = {}, const QString &initialSavePath = {});
     void requestStop();
+    void exportPcap(const QString &path);
+    void startSavingSubsequent();
+    quint64 savedPackets() const;
     bool fileCompleted() const;
     quint64 totalPackets() const;
     QString logDirectory() const;

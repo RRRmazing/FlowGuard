@@ -76,7 +76,11 @@ int main() {
     auto parsed=parsePacket(raw(b),7);
     check(parsed.record.sequence==7 && parsed.fields.size()==3 && parsed.fields[0].name=="Ethernet" && parsed.fields[1].name=="IPv4" && parsed.fields[2].name=="UDP","public wrapper and protocol tree order");
     parsed=parsePacket(raw(arp),1);
-    check(parsed.fields.size()==2 && parsed.fields[1].children.size()==7,"ARP sender/target addresses and opcode tree");
+    check(parsed.fields.size()==2 && parsed.fields[1].children.size()==9 &&
+          parsed.fields[1].children[3].name=="Sender MAC" &&
+          parsed.fields[1].children[6].name=="Target IP" &&
+          parsed.fields[1].children[7].value=="6" && parsed.fields[1].children[8].value=="4",
+          "ARP sender/target addresses, opcode and address lengths tree");
     parsed=parsePacket(raw(frame(true,17,udp(answer,53))),1);
     check(parsed.fields.back().name=="DNS" && parsed.fields.back().children[6].value=="a.com" && parsed.fields.back().children[7].value=="1","DNS first question and type tree");
     auto validTcp=dnsTcp; validTcp.push_back(4); validTcp.insert(validTcp.end(),{0,0,0,0});
