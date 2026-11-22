@@ -181,7 +181,7 @@ else()
 endif()
 configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 add_library(flowguard_ui_support STATIC
-    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/pcap_pager.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp src/ui/alert_panel.cpp
+    src/ui/packet_interpretation.cpp src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/pcap_pager.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp src/ui/alert_panel.cpp
     src/storage/recording_files.cpp
     src/monitoring/resource_sampler.cpp src/monitoring/run_recorder.cpp)
 target_include_directories(flowguard_ui_support PUBLIC src PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -241,3 +241,10 @@ set_target_properties(flowguard_required_fields_tests PROPERTIES AUTOMOC OFF AUT
 add_test(NAME required_header_fields COMMAND flowguard_required_fields_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
 set_tests_properties(required_header_fields PROPERTIES TIMEOUT 30)
+
+# Packet interpretation uses parsed fields, including incomplete/fragmented packets.
+add_executable(flowguard_packet_interpretation_tests tests/packet_interpretation_tests.cpp)
+target_link_libraries(flowguard_packet_interpretation_tests PRIVATE flowguard_ui_support)
+flowguard_configure_cpp(flowguard_packet_interpretation_tests)
+add_test(NAME packet_interpretation COMMAND flowguard_packet_interpretation_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
+set_tests_properties(packet_interpretation PROPERTIES TIMEOUT 20)

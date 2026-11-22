@@ -4,6 +4,7 @@
 #include "ui/chart_panel.h"
 #include "ui/device_selector.h"
 #include "ui/packet_model.h"
+#include "ui/packet_interpretation.h"
 #include "ui/alert_panel.h"
 #include "storage/recording_files.h"
 #include "ui/pcap_pager.h"
@@ -148,7 +149,7 @@ struct MainWindow::Impl
     PacketModel *model = nullptr;
     QTableView *table = nullptr;
     QTreeWidget *tree = nullptr;
-    QLabel *summary = nullptr;
+    QTextBrowser *summary = nullptr;
     ChartPanel *charts = nullptr;
     QChartView *cpuView = nullptr, *memoryView = nullptr;
     QStackedWidget *pages = nullptr;
@@ -612,20 +613,7 @@ struct MainWindow::Impl
                  std::array<std::pair<const char *, int>, 4>{{{"SYN", 2}, {"ACK", 16}, {"FIN", 1}, {"RST", 4}}})
                 item(flag.first, QString::number((*r.tcpFlags & flag.second) ? 1 : 0));
         required->setExpanded(true);
-        QStringList sections{
-            QStringLiteral("%1 · %2\n\n时间：%3\n源：%4\n目的：%5\n原始长度：%6 B\n捕获长度：%7 B")
-                .arg(protocolName(r), parseName(r.status),
-                     QDateTime::fromMSecsSinceEpoch(
-                         std::chrono::duration_cast<std::chrono::milliseconds>(r.timestamp.time_since_epoch()).count())
-                         .toString(Qt::ISODateWithMs),
-                     txt(r.sourceIp), txt(r.destinationIp), num(r.originalLength), num(r.capturedLength))};
-        // Addresses are already shown above; keep only summaries with additional information.
-        if (!r.summary.empty() && r.summary != r.sourceIp + " -> " + r.destinationIp)
-            sections << txt(r.summary);
-        if (!r.diagnostic.empty())
-            sections << txt(r.diagnostic);
-        sections << QStringLiteral("仅展示解析字段；原始报文通过 PCAP 保存。");
-        summary->setText(sections.join("\n\n"));
+        summary->setPlainText(packetInterpretation(*p));
     }
     void tick()
     {
@@ -1015,17 +1003,15 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->tree->setHeaderLabels({QStringLiteral("协议字段"), QStringLiteral("值")});
     d->tree->setColumnWidth(0, 220);
     details->addWidget(d->tree);
-    d->summary = new QLabel;
+    d->summary = new QTextBrowser;
     d->summary->setObjectName("packetSummary");
-    d->summary->setWordWrap(true);
-    d->summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    auto *summaryScroll = new QScrollArea;
-    summaryScroll->setWidgetResizable(true);
-    summaryScroll->setWidget(d->summary);
-    d->summary->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    d->summary->setMargin(12);
-    summaryScroll->setMinimumWidth(280);
-    details->addWidget(summaryScroll);
+    d->summary->setReadOnly(true);
+    d->summary->setOpenLinks(false);
+    d->summary->setAcceptRichText(false);
+    d->summary->setLineWrapMode(QTextEdit::WidgetWidth);
+    d->summary->document()->setDocumentMargin(12);
+    d->summary->setMinimumWidth(280);
+    details->addWidget(d->summary);
     details->setStretchFactor(0, 3);
     details->setStretchFactor(1, 2);
     details->setSizes({600, 400});
@@ -1162,7 +1148,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
             a.rule==AlertRule::Udp?QStringLiteral("UDP"):
             (a.rule==AlertRule::Syn || a.rule==AlertRule::PortScan)?QStringLiteral("TCP"):QStringLiteral("全部协议"));
         d->applyFilter(); d->navigation->setCurrentRow(0);
-        if (!d->model->rowCount()) d->summary->setText(QStringLiteral("最近报文缓存中没有匹配记录；较旧报文需通过原 PCAP 复查。"));
+        if (!d->model->rowCount()) d->summary->setPlainText(QStringLiteral("最近报文缓存中没有匹配记录；较旧报文需通过原 PCAP 复查。"));
     };
     auto *bottom = statusBar();
     bottom->setSizeGripEnabled(false);

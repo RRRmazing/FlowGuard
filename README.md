@@ -144,6 +144,7 @@ ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-test
 保留各自正常的 Git 作者身份，功能分支通过审查和验收后合并到 main。
 
 阶段指南见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
+报文工作台右下角按协议展示关键字段与含义，支持滚动和复制；范围与验收方式见 [报文解读说明](docs/packet-interpretation.md)。
 
 ## 第二阶段后台交付
 

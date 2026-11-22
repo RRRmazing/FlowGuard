@@ -338,6 +338,27 @@ int main(int argc, char **argv)
         check(table->model()->index(0,0).data().toULongLong() == 1, "file numbering starts at one");
         table->selectRow(1);
         check(!tree->findItems("SYN", Qt::MatchExactly | Qt::MatchRecursive).isEmpty(), "TCP flags exposed");
+        auto *packetSummary = w.findChild<QTextBrowser *>("packetSummary");
+        check(packetSummary && !packetSummary->acceptRichText() &&
+                  packetSummary->toPlainText().contains(QStringLiteral("TCP 载荷长度：0 字节")) &&
+                  packetSummary->toPlainText().contains(QStringLiteral("ACK 未置位")),
+              "selected TCP packet has detailed interpretation rendered as plain text");
+        table->selectRow(7);
+        check(packetSummary && packetSummary->toPlainText().contains(QStringLiteral("ARP 应答")) &&
+                  packetSummary->toPlainText().contains(QStringLiteral("发送方 MAC")) &&
+                  !packetSummary->toPlainText().contains(QStringLiteral("TCP 载荷长度：")),
+              "changing selection replaces interpretation with protocol-specific fields");
+        check(packetSummary && packetSummary->isReadOnly(), "interpretation is read-only");
+        if (packetSummary) {
+            check(wait([&] {return packetSummary->verticalScrollBar()->maximum()>0;}),
+                  "long interpretation can scroll to all details");
+            packetSummary->verticalScrollBar()->setValue(packetSummary->verticalScrollBar()->maximum());
+        }
+        const auto detailPreview = qEnvironmentVariable("FLOWGUARD_DETAIL_PREVIEW");
+        if (!detailPreview.isEmpty()) w.saveScreenshot(detailPreview);
+        table->selectRow(1);
+        check(packetSummary && packetSummary->verticalScrollBar()->value()==0,
+              "new selection returns interpretation to top");
         protocol->setCurrentIndex(4);
         button(w, QStringLiteral("应用"))->click();
         check(wait(pageReady), "whole-file TCP filter index ready");
