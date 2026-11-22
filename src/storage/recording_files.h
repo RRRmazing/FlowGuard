@@ -5,7 +5,13 @@ namespace flowguard {
 // File operations run on the UI control worker; no packet buffering in RAM.
 class RecordingFiles {
 public:
-    static QString defaultDirectory();
+    static QString configurationFile();
+    static void useConfigurationFile(const QString& file); // Set before windows/workers start; tests own this file.
+    static QString logDirectory();
+    static bool selectionConfirmed();
+    static QString setDirectories(const QString& logs,const QString& packets);
+    static QString validateDirectory(const QString& directory,bool create = false);
+    static QString defaultDirectory(); // Previously selected directory; empty when unset.
     static QString setDefaultDirectory(const QString&); // Empty on success.
     static QString prepare(const QString& directory, QString& error); // Name only; does not create PCAP.
     static QString suggestedName(const QDateTime& first,const QDateTime& last);

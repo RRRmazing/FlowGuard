@@ -12,7 +12,6 @@
 #include <QDesktopServices>
 #include <QElapsedTimer>
 #include <QHostAddress>
-#include <QStandardPaths>
 #include <QScreen>
 #include <QThread>
 #include <QTimer>
@@ -161,7 +160,9 @@ struct MainWindow::Impl
     QLabel *filePageStatus = nullptr;
     QPushButton *filterApply = nullptr, *filterReset = nullptr;
     QAction *storageAction = nullptr;
-    QString logRoot;
+    QString logRoot,pcapRoot;
+    bool storagePromptPending=false;
+    QPushButton *openLogFolder=nullptr;
     bool storageRestartPending = false;
     PcapPager filePager; // Control worker only; GUI holds only the current page.
     std::atomic_bool cancelFilePages{false};
@@ -196,8 +197,11 @@ struct MainWindow::Impl
     }
     explicit Impl(MainWindow *window) : w(window), poll(new QTimer(window)), second(new QTimer(window))
     {
-        QSettings storage(QCoreApplication::applicationDirPath() + "/data/storage.ini", QSettings::IniFormat);
-        logRoot = storage.value("logRoot", QCoreApplication::applicationDirPath() + "/data/runs").toString();
+        logRoot=RecordingFiles::logDirectory();
+        pcapRoot=RecordingFiles::defaultDirectory();
+        storagePromptPending=(!RecordingFiles::selectionConfirmed() && (logRoot.isEmpty() || pcapRoot.isEmpty())) ||
+            (!logRoot.isEmpty() && !RecordingFiles::validateDirectory(logRoot).isEmpty()) ||
+            (!pcapRoot.isEmpty() && !RecordingFiles::validateDirectory(pcapRoot).isEmpty());
         uptime.start();
         guiTick.start();
         worker->moveToThread(&thread);
@@ -273,6 +277,7 @@ struct MainWindow::Impl
             widget->setEnabled(!blocked);
         follow->setEnabled(!fileComplete && !blocked);
         if(storageAction) storageAction->setEnabled(idle);
+        if(openLogFolder) openLogFolder->setEnabled(!recordPath.isEmpty() && QFileInfo(recordPath).isDir());
         for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snapshotControl})
             widget->setEnabled(idle);
         snapshotUp->setEnabled(idle && snaplen->value() < snaplen->maximum());
@@ -290,7 +295,8 @@ struct MainWindow::Impl
             saveArmed ? QStringLiteral("取消保存等待") :
             (!stagingPath.isEmpty() || snapshot.savingActive || snapshot.savingRequested) ? QStringLiteral("结束保存") : QStringLiteral("开始保存报文"));
         save->setToolTip(fileMode ? QStringLiteral("PCAP 文件分析不提供保存。点击“开始采集”后，可选择从第一包开始保存。") :
-            stagingPath.isEmpty() ? QStringLiteral("可提前开启等待实时采集；结束时确认文件名和位置。") : stagingPath);
+            stagingPath.isEmpty() ? QStringLiteral("请在采集前选好目录。当前目录：%1；结束时确认文件名和位置。")
+                .arg(pcapRoot.isEmpty()?QStringLiteral("尚未选择"):QDir::toNativeSeparators(pcapRoot)) : stagingPath);
         if(saveState) saveState->setText(finishingSave ? QStringLiteral("正在结束报文保存") : saveArmed ? QStringLiteral("等待采集") :
             snapshot.savingActive ? QStringLiteral("报文保存中") :
             (!stagingPath.isEmpty() || snapshot.savingRequested) ? QStringLiteral("等待首包保存") : recordingNotice);
@@ -363,6 +369,25 @@ struct MainWindow::Impl
         finishingSave=true;saveArmed=false;
         command("finish_recording",[this]{return backend.finishSaving();},{},[this](const OperationResult&){settleRecording(backend.snapshot());});
     }
+    bool ensureRecordingDirectory(bool allowDialog)
+    {
+        auto directory=RecordingFiles::defaultDirectory();
+        auto problem=RecordingFiles::validateDirectory(directory);
+        if(!problem.isEmpty() && allowDialog) {
+            chooseStorage();directory=RecordingFiles::defaultDirectory();
+            problem=RecordingFiles::validateDirectory(directory);
+        }
+        if(!problem.isEmpty()) {
+            controlError=problem+QStringLiteral("\n请在采集前选择报文目录；不会自动改用其他位置。");updateControls();return false;
+        }
+        pcapRoot=directory;return true;
+    }
+    void promptForStorage()
+    {
+        if(!storagePromptPending || closing || qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE"))return;
+        if(busy || finishingSave || QApplication::activeModalWidget()) {QTimer::singleShot(100,w,[this]{promptForStorage();});return;}
+        storagePromptPending=false;chooseStorage();
+    }
     void toggleRecording()
     {
         if(fileMode || busy || closing || finishingSave) return;
@@ -370,6 +395,7 @@ struct MainWindow::Impl
         if(!stagingPath.isEmpty()) {finishRecording();return;}
         if(snapshot.savingActive || snapshot.savingRequested) {command("finish_saving",[this]{return backend.finishSaving();});return;}
         recordingNotice.clear();
+        if(!ensureRecordingDirectory(!active())) return;
         if(!active()) {saveArmed=true;updateControls();return;}
         QString problem;
         stagingPath=RecordingFiles::prepare(RecordingFiles::defaultDirectory(),problem);
@@ -442,42 +468,29 @@ struct MainWindow::Impl
             return edit;
         };
         auto *logs = directoryRow(QStringLiteral("运行日志目录"), logRoot);
-        auto *captures = directoryRow(QStringLiteral("PCAP 默认记录和最终保存目录"), captureDirectory);
+        auto *captures = directoryRow(QStringLiteral("PCAP 记录和最终保存目录"), captureDirectory);
         logs->setObjectName("storageLogRoot");
         captures->setObjectName("storageCaptureDirectory");
-        auto *notice = new QLabel(QStringLiteral("日志目录在下次启动后生效。PCAP 可提前点击“开始保存报文”等待采集，也可采集中开启；结束时再确认文件名和最终位置，取消则丢弃本段。"));
+        auto *notice = new QLabel(QStringLiteral("请自行选择目录，不预设盘符或系统位置；留空表示不启用该项。首次选择日志目录立即开始记录，之后修改在下次启动生效。PCAP目录必须在采集前选好；采集中开启保存不会再弹路径窗口。"));
         notice->setWordWrap(true); form->addRow(notice);
         auto *status = new QLabel; status->setWordWrap(true); form->addRow(status);
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
         form->addRow(buttons);
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-            const auto newLogs = QDir::cleanPath(logs->text().trimmed());
-            const auto newCaptures = QDir::cleanPath(captures->text().trimmed());
-            for (const auto &path : {newLogs, newCaptures}) {
-                if (!QDir::isAbsolutePath(path) || !QDir().mkpath(path)) {
-                    status->setText(QStringLiteral("请选择可创建的绝对目录：") + path); return;
-                }
-                QTemporaryFile probe(QDir(path).filePath(".flowguard-write-check-XXXXXX"));
-                if (!probe.open() || probe.write("ok") != 2 || !probe.flush()) {
-                    status->setText(QStringLiteral("目录不可写：") + path); return;
-                }
+            auto clean=[](const QString &text){return text.trimmed().isEmpty()?QString():QDir::cleanPath(text.trimmed());};
+            const auto newLogs=clean(logs->text()),newCaptures=clean(captures->text());
+            const auto problem=RecordingFiles::setDirectories(newLogs,newCaptures);
+            if(!problem.isEmpty()){status->setText(problem);return;}
+            storageRestartPending=storageRestartPending || (!recordPath.isEmpty() && newLogs!=logRoot);
+            logRoot=newLogs;pcapRoot=newCaptures;
+            controlError.clear();
+            if(recordPath.isEmpty() && newLogs.isEmpty()) recordError.clear();
+            if(recordPath.isEmpty() && !newLogs.isEmpty()) {
+                const auto explicitRoot=qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
+                const auto root=explicitRoot.isEmpty()?newLogs:explicitRoot;
+                QMetaObject::invokeMethod(worker,[this,root]{openLog(root);},Qt::QueuedConnection);
             }
-            const auto settingsDirectory = QCoreApplication::applicationDirPath() + "/data";
-            if (!QDir().mkpath(settingsDirectory)) {
-                status->setText(QStringLiteral("不能保存设置：") + settingsDirectory); return;
-            }
-            QSettings storage(settingsDirectory + "/storage.ini", QSettings::IniFormat);
-            storage.setValue("logRoot", newLogs);
-
-            storage.sync();
-            if (storage.status() != QSettings::NoError) {
-                status->setText(QStringLiteral("保存设置失败，请检查程序目录的写入权限。")); return;
-            }
-            const auto captureProblem=RecordingFiles::setDefaultDirectory(newCaptures);
-            if(!captureProblem.isEmpty()) {status->setText(captureProblem);return;}
-            storageRestartPending = storageRestartPending || newLogs != logRoot;
-            logRoot = newLogs;
             dialog.accept();
             updateSecond();
         });
@@ -684,25 +697,30 @@ struct MainWindow::Impl
             indexedFileSession!=snapshot.sessionId && !busy && !closing && !finishingSave)
             loadFilePage(0,true);
     }
+    void openLog(const QString &root)
+    {
+        QString problem;
+        if(!root.isEmpty()) {
+            problem=RecordingFiles::validateDirectory(root,!qEnvironmentVariable("FLOWGUARD_LOG_ROOT").isEmpty());
+            if(problem.isEmpty()) {
+                recorder.open(root);problem=recorder.error();
+                if(problem.isEmpty()){loggedAlerts.clear();loggedAlertSession=0;lastState.clear();lastSourceError.clear();lastSavingError.clear();}
+            }
+        }
+        QMetaObject::invokeMethod(w,[this,path=recorder.directory(),problem,root] {
+            recordPath=path;recordError=problem;
+            recordLocationDescription=root.isEmpty()?QStringLiteral("未选择日志目录，不写运行日志"):QStringLiteral("用户选择的日志目录");
+        },Qt::QueuedConnection);
+    }
     void logStart()
     {
         QMetaObject::invokeMethod(
             worker,
             [this] {
                 QString root = qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
-                const bool customRoot = !root.isEmpty();
                 if (root.isEmpty())
                     root = logRoot;
-                recorder.open(root);
-                QMetaObject::invokeMethod(
-                    w,
-                    [this, path = recorder.directory(), err = recorder.error(), customRoot] {
-                        recordPath = path;
-                        recordLocationDescription = customRoot ? QStringLiteral("指定的日志目录")
-                                                               : QStringLiteral("程序旁 data/runs 或软件中选择的日志目录");
-                        recordError = err;
-                    },
-                    Qt::QueuedConnection);
+                openLog(root);
                 recorderTimer = new QTimer(worker);
                 recorderTimer->setInterval(1000);
                 QObject::connect(recorderTimer, &QTimer::timeout, worker, [this] {
@@ -737,7 +755,7 @@ struct MainWindow::Impl
                         w,
                         [this, r, err = recorder.error()] {
                             resource = r;
-                            recordError = err;
+                            if(!err.isEmpty()) recordError = err;
                             resourceHistory.push_back({uptime.elapsed() / 1000., r});
                             if (resourceHistory.size() > 3600)
                                 resourceHistory.pop_front();
@@ -789,8 +807,10 @@ struct MainWindow::Impl
                                : snapshot.savingRequested ? QStringLiteral("等待首包/准备保存")
                                                           : QStringLiteral("未保存");
         recordLabel->setText(
-            QStringLiteral("报文保存状态：%1\n屏幕最多 3600 点；完整日志持续写盘。过旧离线时间桶 %2 包")
-                .arg(saving, num(snapshot.lateHistoryPackets)));
+            QStringLiteral("报文保存状态：%1\n报文目录：%2\n本次日志：%3\n屏幕最多3600点；过旧离线时间桶 %4 包")
+                .arg(saving,pcapRoot.isEmpty()?QStringLiteral("尚未选择"):QDir::toNativeSeparators(pcapRoot),
+                     recordPath.isEmpty()?QStringLiteral("未启用或目录不可用"):QDir::toNativeSeparators(recordPath),num(snapshot.lateHistoryPackets)));
+        recordLabel->setTextFormat(Qt::PlainText);
         if(storageRestartPending) recordLabel->setText(recordLabel->text()+QStringLiteral("\n日志目录已修改，下次启动生效。"));
         recordLabel->setToolTip(recordPath);
         QList<QPointF> cpu, memory;
@@ -1106,6 +1126,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->recordLabel->setWordWrap(true);
     resLayout->addWidget(d->recordLabel);
     auto *folder = new QPushButton(QStringLiteral("打开运行日志目录"));
+    d->openLogFolder=folder;
     folder->setToolTip(
         QStringLiteral("打开当前电脑上本次运行的日志目录。每位用户使用自己的存储位置，不依赖开发者用户名。"));
     resLayout->addWidget(folder);
@@ -1187,7 +1208,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
             [this](const QModelIndex &i) { d->showPacket(i.row()); });
     connect(d->table->verticalScrollBar(), &QScrollBar::sliderPressed, this, [this] { d->follow->setChecked(false); });
     connect(folder, &QPushButton::clicked, this,
-            [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(d->recordPath)); });
+            [this] { if(!d->recordPath.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(d->recordPath)); });
     connect(d->poll, &QTimer::timeout, this, [this] { d->tick(); });
     d->poll->start(100);
     connect(d->second, &QTimer::timeout, this, [this] { d->updateSecond(); });
@@ -1195,6 +1216,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->logStart();
     d->updateControls();
     d->refreshDevices();
+    QTimer::singleShot(0,this,[this]{d->promptForStorage();});
 }
 MainWindow::~MainWindow()
 {
@@ -1268,6 +1290,7 @@ void MainWindow::beginDevice(const QString &id, const QString &bpf, const QStrin
     if (!initialSavePath.isEmpty())
         processing.savePath = std::filesystem::path(initialSavePath.toStdWString());
     else if(d->saveArmed) {
+        if(!d->ensureRecordingDirectory(true)) {d->saveArmed=false;d->updateControls();return;}
         QString problem;
         d->stagingPath=RecordingFiles::prepare(RecordingFiles::defaultDirectory(),problem);
         if(d->stagingPath.isEmpty()){d->controlError=problem;d->updateControls();return;}

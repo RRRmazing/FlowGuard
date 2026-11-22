@@ -48,6 +48,9 @@ void RunRecorder::metadata(const QString &name, QJsonObject data)
 }
 bool RunRecorder::open(const QString &root)
 {
+    if(root.trimmed().isEmpty() || !QDir::isAbsolutePath(root)) {
+        error_=QStringLiteral("尚未选择有效的日志目录。");return false;
+    }
     timer_.start();
     start_ = timestamp();
     directory_ = QDir(root).absoluteFilePath(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz") + '-' +
@@ -99,6 +102,7 @@ bool RunRecorder::open(const QString &root)
 }
 void RunRecorder::event(const QString &name, const QJsonObject &detail)
 {
+    if(!timer_.isValid()) return;
     write(events_, QJsonDocument(QJsonObject{{"timestamp", timestamp()},
                                              {"elapsed_seconds", elapsed()},
                                              {"event", name},
@@ -108,6 +112,7 @@ void RunRecorder::event(const QString &name, const QJsonObject &detail)
 }
 void RunRecorder::sample(const ProcessingSnapshot &s, const ResourceSample &r, double delay, std::uint64_t listEvicted)
 {
+    if(!timer_.isValid()) return;
     QStringList v{timestamp(),
                   QString::number(elapsed(), 'f', 3),
                   integer(s.sessionId),
@@ -137,7 +142,7 @@ void RunRecorder::sample(const ProcessingSnapshot &s, const ResourceSample &r, d
 }
 void RunRecorder::finish(const ProcessingSnapshot &s)
 {
-    if (finished_)
+    if (finished_ || !timer_.isValid())
         return;
     finished_ = true;
     event("application_stopped", {{"session_id", integer(s.sessionId)},

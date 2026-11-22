@@ -16,10 +16,11 @@ int main(int argc,char** argv) {
     auto wait=[&](const auto& f,const char* label){check(QTest::qWaitFor(f,6000),label);};
     QTemporaryDir owned(QDir::currentPath()+"/recording-tests-XXXXXX");
     if(!owned.isValid())return 2;
-    QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,owned.path()+"/settings");
+    RecordingFiles::useConfigurationFile(owned.path()+"/settings/storage.ini");
     qputenv("FLOWGUARD_LOG_ROOT",(owned.path()+"/logs").toUtf8());qputenv("FLOWGUARD_ACCEPTANCE","1");
     try {
+        check(RecordingFiles::defaultDirectory().isEmpty()&&RecordingFiles::logDirectory().isEmpty(),"fresh settings have no inferred storage directory");
+        check(!QFileInfo::exists(RecordingFiles::configurationFile()),"reading unset storage does not create settings");
         const auto folder=owned.path()+"/recordings";
         RecordingFiles::setDefaultDirectory(folder);
         check(RecordingFiles::defaultDirectory()==folder,"default directory is remembered");

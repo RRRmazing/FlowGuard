@@ -255,8 +255,9 @@ int main(int argc, char **argv)
                 if (!dialog) return;
                 auto *logs = dialog->findChild<QLineEdit *>("storageLogRoot");
                 auto *captures = dialog->findChild<QLineEdit *>("storageCaptureDirectory");
-                check(logs && captures && QDir::isAbsolutePath(logs->text()) && QDir::isAbsolutePath(captures->text()),
-                      "separate absolute log and packet destinations");
+                check(logs && captures && (logs->text().isEmpty() || QDir::isAbsolutePath(logs->text())) &&
+                      (captures->text().isEmpty() || QDir::isAbsolutePath(captures->text())),
+                      "log and packet destinations are explicitly selected or remain unset");
                 dialog->reject();
             });
             storageAction->trigger();

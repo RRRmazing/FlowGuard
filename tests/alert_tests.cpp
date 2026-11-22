@@ -29,7 +29,7 @@ RawPacket raw(unsigned protocol,unsigned port,unsigned flags,unsigned type,unsig
 bool rescanning(const AlertSnapshot& s){return std::any_of(s.rebuilding.begin(),s.rebuilding.end(),[](bool b){return b;});}
 std::size_t count(const AlertSnapshot& s,AlertRule rule){return std::count_if(s.records.begin(),s.records.end(),[rule](const auto& a){return a.rule==rule;});}
 }
-int main(int argc,char** argv){try{
+int wmain(int argc,wchar_t** argv){try{
     if(argc!=2)return 2;
     AlertEngine syn(AlertRule::Syn,{true,5,3});
     auto r=packet(0);syn.add(r);r=packet(1);syn.add(r);r=packet(2);syn.add(r);
@@ -78,7 +78,7 @@ int main(int argc,char** argv){try{
     check(grouped.limited()==1&&grouped.records().empty(),"group capacity is bounded and reported");
     AlertEngine alertBound(AlertRule::Syn,{true,5,1});for(unsigned i=0;i<1001;++i)alertBound.add(packet(1,TransportProtocol::Tcp,i));
     check(alertBound.limited()==1&&alertBound.records().size()==1000,"alert capacity is bounded and reported");
-    auto path=std::filesystem::u8path(argv[1]);
+    auto path=std::filesystem::path(argv[1]);
     path += "-"+std::to_string(steady_clock::now().time_since_epoch().count())+".pcap";
     struct Cleanup { std::filesystem::path path; ~Cleanup(){std::error_code ec;std::filesystem::remove(path,ec);} } cleanup{path};
     PcapWriter writer;check(writer.open(path,{}).ok(),"create owned PCAP fixture");

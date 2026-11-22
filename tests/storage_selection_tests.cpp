@@ -1,0 +1,95 @@
+#include "storage/recording_files.h"
+#include "monitoring/run_recorder.h"
+#include "ui/main_window.h"
+#include <QtTest/QTest>
+#include <QtWidgets>
+#include <iostream>
+
+int main(int argc,char **argv) {
+    QApplication app(argc,argv);
+    QTemporaryDir owned(QDir::currentPath()+"/storage-selection-XXXXXX");
+    if(!owned.isValid())return 2;
+    const auto config=owned.path()+"/配置/storage.ini";
+    flowguard::RecordingFiles::useConfigurationFile(config);
+    int failures=0;
+    auto check=[&](bool value,const char *name) {if(!value){++failures;std::cerr<<"FAIL "<<name<<'\n';}};
+    using Files=flowguard::RecordingFiles;
+    check(Files::defaultDirectory().isEmpty()&&Files::logDirectory().isEmpty(),"first use has no implicit data directories");
+    QString error;
+    check(Files::prepare({},error).isEmpty()&&!error.isEmpty(),"unset packet directory cannot begin writing");
+    check(!QFileInfo::exists(config),"unset readers do not create a settings file");
+    check(!Files::validateDirectory("relative/path",true).isEmpty(),"relative destinations rejected");
+    const auto blocked=owned.path()+"/不是文件夹";
+    {QFile file(blocked);check(file.open(QIODevice::WriteOnly),"create owned non-directory fixture");}
+    check(!Files::validateDirectory(blocked,true).isEmpty(),"file cannot be used as a directory");
+    {
+        flowguard::RunRecorder dormant;
+        dormant.event("not-configured"); dormant.sample({}, {},0); dormant.finish({});
+        check(dormant.directory().isEmpty()&&dormant.error().isEmpty(),"unconfigured recorder does not attempt any file writes");
+    }
+    {
+        flowguard::MainWindow window("storage-selection-test");window.setAttribute(Qt::WA_DontShowOnScreen);window.show();
+        auto *action=window.findChild<QAction *>("storageLocationsAction");
+        check(action!=nullptr,"user can open storage selection");
+        check(QTest::qWaitFor([&]{return action&&action->isEnabled();},6000),"initial operations settle");
+        auto select=[&](const QString &logs,const QString &packets,bool cancel,bool invalid) {
+            bool handled=false;
+            QTimer::singleShot(0,&window,[&] {
+                auto *dialog=window.findChild<QDialog *>("storageLocationsDialog");
+                check(dialog!=nullptr,"storage selection dialog opens");if(!dialog)return;
+                auto *logEdit=dialog->findChild<QLineEdit *>("storageLogRoot");
+                auto *packetEdit=dialog->findChild<QLineEdit *>("storageCaptureDirectory");
+                check(logEdit&&packetEdit,"independent log and packet choices");
+                if(!logEdit||!packetEdit){dialog->reject();return;}
+                if(cancel) {
+                    check(logEdit->text().isEmpty()&&packetEdit->text().isEmpty(),"first-use dialog has no prefilled system path");
+                    dialog->reject();handled=true;return;
+                }
+                logEdit->setText(logs);packetEdit->setText(packets);
+                auto *buttons=dialog->findChild<QDialogButtonBox *>();
+                buttons->button(QDialogButtonBox::Save)->click();
+                if(invalid) {check(dialog->isVisible(),"invalid path keeps dialog open for correction");dialog->reject();}
+                handled=true;
+            });
+            if(action)action->trigger();check(handled,"dialog interaction completed");
+        };
+        select({}, {},true,false);
+        check(!QFileInfo::exists(config)&&window.logDirectory().isEmpty(),"cancel keeps storage unset and logging disabled");
+        auto *record=window.findChild<QPushButton *>("recordPackets");
+        QTimer::singleShot(0,&window,[&] {
+            auto *dialog=window.findChild<QDialog *>("storageLocationsDialog");
+            check(dialog!=nullptr,"saving without a selected directory asks before arming");
+            if(dialog)dialog->reject();
+        });
+        if(record)record->click();else check(false,"recording control exists");
+        check(record&&record->text()==QStringLiteral("开始保存报文")&&!QFileInfo::exists(config),
+              "cancelling the first directory choice cannot enter recording or create defaults");
+        select({},"relative/path",false,true);
+        check(!QFileInfo::exists(config),"invalid selection is not persisted");
+        const auto packets=owned.path()+"/用户选择的报文";
+        select({},packets,false,false);
+        check(Files::defaultDirectory()==packets&&Files::logDirectory().isEmpty(),"packet-only choice does not invent a log directory");
+        check(Files::selectionConfirmed(),"explicitly leaving logging disabled is remembered without repeated startup prompts");
+        check(window.logDirectory().isEmpty(),"logging remains disabled until selected");
+        const auto logs=owned.path()+"/用户选择的日志";
+        select(logs,packets,false,false);
+        check(QTest::qWaitFor([&]{return window.logDirectory().startsWith(logs+"/");},6000),"first chosen log directory starts logging immediately");
+        check(QFileInfo::exists(window.logDirectory()+"/resources.csv"),"log files only appear in the selected location");
+        const auto run=window.logDirectory();
+        window.close();check(QTest::qWaitFor([&]{return !window.isVisible();},6000),"window closes cleanly");
+        check(QFileInfo::exists(run+"/result.json"),"selected logging has a durable exit record");
+    }
+    const auto disconnected=owned.path()+"/模拟断开的目录";
+    check(Files::setDefaultDirectory(disconnected).isEmpty(),"remember selected directory");
+    check(QDir().rmdir(disconnected),"remove empty owned directory to simulate disconnection");
+    check(Files::prepare(Files::defaultDirectory(),error).isEmpty()&&!QFileInfo::exists(disconnected),
+          "missing stored directory is rejected without fallback or recreation");
+    const auto legacy=owned.path()+"/legacy.ini";
+    {QSettings old(legacy,QSettings::IniFormat);old.setValue("captureDirectory",owned.path()+"/旧版选定的报文");old.setValue("logRoot",owned.path()+"/旧版日志");old.sync();}
+    Files::useConfigurationFile(legacy);
+    check(Files::defaultDirectory()==owned.path()+"/旧版选定的报文"&&Files::logDirectory()==owned.path()+"/旧版日志",
+          "portable legacy choices are retained rather than replaced with desktop defaults");
+    Files::useConfigurationFile(blocked+"/storage.ini");
+    check(!Files::setDirectories({},owned.path()+"/新选择").isEmpty(),"configuration write failure is explicit");
+    std::cout<<"STORAGE_SELECTION "<<(failures?"FAIL":"PASS")<<'\n';return failures?1:0;
+}

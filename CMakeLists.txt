@@ -68,7 +68,8 @@ file(GENERATE OUTPUT "$<TARGET_FILE_DIR:FlowGuard>/FlowGuard使用指南.html"
 
 enable_testing()
 add_test(NAME stage0_smoke COMMAND FlowGuard --smoke-test)
-set_tests_properties(stage0_smoke PROPERTIES TIMEOUT 15)
+set_tests_properties(stage0_smoke PROPERTIES TIMEOUT 15
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/smoke-runs")
 
 # Parsing stays independent of Qt and Npcap so captured and offline packets share it.
 add_library(flowguard_parser STATIC src/parser/packet_parser.cpp)
@@ -205,20 +206,28 @@ add_test(NAME stage3_support COMMAND flowguard_stage3_support_tests)
 set_tests_properties(stage3_support PROPERTIES TIMEOUT 20 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_test(NAME stage3_gui_file COMMAND FlowGuard --accept-file "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
 set_tests_properties(stage3_gui_file PROPERTIES TIMEOUT 20
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/acceptance-runs")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/acceptance-runs")
 find_package(Qt6 REQUIRED COMPONENTS Test)
 add_executable(flowguard_recording_tests tests/recording_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
 target_link_libraries(flowguard_recording_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
 flowguard_configure_cpp(flowguard_recording_tests)
 add_test(NAME recording_workflow COMMAND flowguard_recording_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
-set_tests_properties(recording_workflow PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77 LABELS "hardware" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(recording_workflow PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77 LABELS "hardware"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/recording-test-runs")
+add_executable(flowguard_storage_selection_tests tests/storage_selection_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
+target_link_libraries(flowguard_storage_selection_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
+flowguard_configure_cpp(flowguard_storage_selection_tests)
+add_test(NAME user_selected_storage COMMAND flowguard_storage_selection_tests)
+set_tests_properties(user_selected_storage PROPERTIES TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=")
 add_executable(flowguard_alert_gui_tests tests/alert_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
 target_link_libraries(flowguard_alert_gui_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
 flowguard_configure_cpp(flowguard_alert_gui_tests)
 add_test(NAME alert_gui_integration COMMAND flowguard_alert_gui_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/alerts-demo.pcap" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/alerts-normal.pcap"
     "${CMAKE_CURRENT_BINARY_DIR}")
-set_tests_properties(alert_gui_integration PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(alert_gui_integration PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_ACCEPTANCE=1;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/alert-test-runs")
 add_executable(flowguard_stage3_gui_tests tests/stage3_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
 set_target_properties(flowguard_stage3_gui_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gui-test-bin")
