@@ -46,8 +46,25 @@ void RunRecorder::metadata(const QString &name, QJsonObject data)
         if (error_.isEmpty())
             error_ = file.fileName() + ": " + file.errorString();
 }
+void RunRecorder::reset()
+{
+    resources_.close();events_.close();
+    timer_.invalidate();
+    directory_.clear();start_.clear();error_.clear();
+    opened_=false;finished_=false;
+}
+bool RunRecorder::failedOpen()
+{
+    // Keep any partial files as evidence, but never expose a failed attempt as an active run.
+    const auto problem=error_;
+    reset();error_=problem;
+    return false;
+}
 bool RunRecorder::open(const QString &root)
 {
+    // Repeated requests must not replace a running log or discard its exit record.
+    if(isOpen()) return true;
+    reset();
     if(root.trimmed().isEmpty() || !QDir::isAbsolutePath(root)) {
         error_=QStringLiteral("尚未选择有效的日志目录。");return false;
     }
@@ -58,7 +75,7 @@ bool RunRecorder::open(const QString &root)
     if (!QDir().mkpath(directory_))
     {
         error_ = QStringLiteral("不能创建运行日志目录：") + directory_;
-        return false;
+        return failedOpen();
     }
     resources_.setFileName(directory_ + "/resources.csv");
     events_.setFileName(directory_ + "/events.jsonl");
@@ -66,7 +83,7 @@ bool RunRecorder::open(const QString &root)
         !events_.open(QIODevice::WriteOnly | QIODevice::NewOnly))
     {
         error_ = QStringLiteral("不能创建资源/事件日志：") + directory_;
-        return false;
+        return failedOpen();
     }
     write(resources_, "timestamp,elapsed_seconds,session_id,source,state,cpu_percent,working_set_bytes,process_read_"
                       "bytes,process_write_bytes,total_packets,total_bytes,saved_packets,queued_packets,queued_bytes,"
@@ -97,12 +114,15 @@ bool RunRecorder::open(const QString &root)
               {"total_memory_bytes", integer(memory.ullTotalPhys)},
               {"cpu", qEnvironmentVariable("PROCESSOR_IDENTIFIER")},
               {"scope", "GUI process; CPU normalized by all logical processors; I/O is process cumulative"}});
+    if(!error_.isEmpty()) return failedOpen();
+    opened_=true;
     event("application_started");
-    return error_.isEmpty();
+    if(!error_.isEmpty()) return failedOpen();
+    return true;
 }
 void RunRecorder::event(const QString &name, const QJsonObject &detail)
 {
-    if(!timer_.isValid()) return;
+    if(!isOpen()) return;
     write(events_, QJsonDocument(QJsonObject{{"timestamp", timestamp()},
                                              {"elapsed_seconds", elapsed()},
                                              {"event", name},
@@ -112,7 +132,7 @@ void RunRecorder::event(const QString &name, const QJsonObject &detail)
 }
 void RunRecorder::sample(const ProcessingSnapshot &s, const ResourceSample &r, double delay, std::uint64_t listEvicted)
 {
-    if(!timer_.isValid()) return;
+    if(!isOpen()) return;
     QStringList v{timestamp(),
                   QString::number(elapsed(), 'f', 3),
                   integer(s.sessionId),
@@ -142,12 +162,12 @@ void RunRecorder::sample(const ProcessingSnapshot &s, const ResourceSample &r, d
 }
 void RunRecorder::finish(const ProcessingSnapshot &s)
 {
-    if (finished_ || !timer_.isValid())
+    if (!isOpen())
         return;
-    finished_ = true;
     event("application_stopped", {{"session_id", integer(s.sessionId)},
                                   {"packets", integer(s.statistics.totalPackets)},
                                   {"saved_packets", integer(s.savedPackets)}});
+    finished_ = true;
     resources_.close();
     events_.close();
     metadata("result.json", {{"started", start_},

@@ -166,6 +166,7 @@ struct MainWindow::Impl
     bool storagePromptPending=false;
     QPushButton *openLogFolder=nullptr;
     bool storageRestartPending = false;
+    bool logStarted = false, logOpening = false;
     PcapPager filePager; // Control worker only; GUI holds only the current page.
     std::atomic_bool cancelFilePages{false};
     QString currentFilePath;
@@ -202,7 +203,8 @@ struct MainWindow::Impl
         controlError=RecordingFiles::initialize();
         logRoot=RecordingFiles::logDirectory();
         pcapRoot=RecordingFiles::defaultDirectory();
-        storagePromptPending=!RecordingFiles::selectionConfirmed() ||
+        // Installer choices (or usable defaults for a direct launch) need no second confirmation.
+        storagePromptPending=!controlError.isEmpty() ||
             (!logRoot.isEmpty() && !RecordingFiles::validateDirectory(logRoot).isEmpty()) ||
             (!pcapRoot.isEmpty() && !RecordingFiles::validateDirectory(pcapRoot).isEmpty());
         uptime.start();
@@ -485,11 +487,12 @@ struct MainWindow::Impl
             const auto newLogs=clean(logs->text()),newCaptures=clean(captures->text());
             const auto problem=RecordingFiles::setDirectories(newLogs,newCaptures);
             if(!problem.isEmpty()){status->setText(problem);return;}
-            storageRestartPending=storageRestartPending || (!recordPath.isEmpty() && newLogs!=logRoot);
+            storageRestartPending=storageRestartPending || ((logStarted || logOpening) && newLogs!=logRoot);
             logRoot=newLogs;pcapRoot=newCaptures;
             controlError.clear();
-            if(recordPath.isEmpty() && newLogs.isEmpty()) recordError.clear();
-            if(recordPath.isEmpty() && !newLogs.isEmpty()) {
+            if(!logStarted && !logOpening && newLogs.isEmpty()) recordError.clear();
+            if(!logStarted && !logOpening && !newLogs.isEmpty()) {
+                logOpening=true;
                 const auto explicitRoot=qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
                 const auto root=explicitRoot.isEmpty()?newLogs:explicitRoot;
                 QMetaObject::invokeMethod(worker,[this,root]{openLog(root);},Qt::QueuedConnection);
@@ -706,26 +709,28 @@ struct MainWindow::Impl
     void openLog(const QString &root)
     {
         QString problem;
+        bool started=false;
         if(!root.isEmpty()) {
             problem=RecordingFiles::validateDirectory(root,!qEnvironmentVariable("FLOWGUARD_LOG_ROOT").isEmpty());
             if(problem.isEmpty()) {
-                recorder.open(root);problem=recorder.error();
-                if(problem.isEmpty()){loggedAlerts.clear();loggedAlertSession=0;lastState.clear();lastSourceError.clear();lastSavingError.clear();}
+                started=recorder.open(root);problem=recorder.error();
+                if(started){loggedAlerts.clear();loggedAlertSession=0;lastState.clear();lastSourceError.clear();lastSavingError.clear();}
             }
         }
-        QMetaObject::invokeMethod(w,[this,path=recorder.directory(),problem,root] {
-            recordPath=path;recordError=problem;
+        QMetaObject::invokeMethod(w,[this,path=started?recorder.directory():QString(),problem,root,started] {
+            recordPath=path;recordError=problem;logStarted=started;logOpening=false;
+            if(!started || root==logRoot) storageRestartPending=false;
             recordLocationDescription=root.isEmpty()?QStringLiteral("未选择日志目录，不写运行日志"):QStringLiteral("用户选择的日志目录");
         },Qt::QueuedConnection);
     }
     void logStart()
     {
+        logOpening=true;
+        const auto explicitRoot=qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
+        const auto root=explicitRoot.isEmpty()?logRoot:explicitRoot;
         QMetaObject::invokeMethod(
             worker,
-            [this] {
-                QString root = qEnvironmentVariable("FLOWGUARD_LOG_ROOT");
-                if (root.isEmpty())
-                    root = logRoot;
+            [this,root] {
                 openLog(root);
                 recorderTimer = new QTimer(worker);
                 recorderTimer->setInterval(1000);

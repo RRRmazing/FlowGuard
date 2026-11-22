@@ -2,7 +2,7 @@
 
 ## 双方功能融合分支
 
-当前融合异常预警与分段保存，以及完整 PCAP 分页、协议字段和图表交互。新用户默认数据位于系统文档目录的 FlowGuard/Captures 与 FlowGuard/Logs，首次启动可确认或修改位置；与程序安装目录分开，旧保存位置优先迁移保留。分支、验证与人工检查见 [融合验收记录](docs/integration-acceptance.md)。
+当前融合异常预警与分段保存，以及完整 PCAP 分页、协议字段和图表交互。新用户默认数据位于系统文档目录的 FlowGuard/Captures 与 FlowGuard/Logs，有效配置直接启动，不再强制弹窗；位置可在保存设置中修改，与程序安装目录分开，旧保存位置优先迁移保留。分支、验证与人工检查见 [融合验收记录](docs/integration-acceptance.md)。
 
 ## 报文保存交互更新
 

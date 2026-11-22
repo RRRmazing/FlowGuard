@@ -146,6 +146,27 @@ int main(int argc, char **argv)
     blocker.close();
     RunRecorder bad;
     check(!bad.open(blocker.fileName()) && !bad.error().isEmpty(), "log creation failure visible");
+    const auto initialError=bad.error();
+    check(!bad.isOpen() && bad.directory().isEmpty() && bad.elapsed()==0,
+          "failed initialization clears the active path and clock");
+    bad.event("ignored_after_failure");bad.sample(s,first,0);bad.finish(s);
+    check(bad.error()==initialError && !bad.isOpen(), "inactive writes do not replace the original creation error");
+    check(bad.open(temp.path()+"/retry") && bad.isOpen() && bad.error().isEmpty(),
+          "retry with a valid directory clears the previous failure");
+    const auto retriedRun=bad.directory();
+    check(bad.open(temp.path()+"/duplicate") && bad.directory()==retriedRun,
+          "duplicate open does not replace a running log");
+    bad.sample(s,first,0);bad.finish(s);
+    check(!bad.isOpen(), "finished run is no longer active");
+    QFile retriedResult(retriedRun+"/result.json");
+    check(retriedResult.open(QIODevice::ReadOnly), "retried run gets an exit record");
+    const auto retriedJson=QJsonDocument::fromJson(retriedResult.readAll()).object();
+    check(retriedJson["logging_error"].toString().isEmpty() && retriedJson["total_packets"].toString()=="18",
+          "retried run metadata has no stale error and retains session totals");
+    check(bad.open(temp.path()+"/after-finish"), "same recorder can start again after finish");
+    const auto reopenedRun=bad.directory();bad.finish(s);
+    check(reopenedRun!=retriedRun && QFile::exists(reopenedRun+"/result.json"),
+          "new run resets the finished flag and finalizes independently");
     std::cout << "STAGE3_SUPPORT " << (failures ? "FAIL" : "PASS") << '\n';
     return failures ? 1 : 0;
 }

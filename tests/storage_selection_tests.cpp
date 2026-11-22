@@ -19,7 +19,31 @@ int main(int argc,char **argv) {
     const auto defaultPackets=Files::defaultDirectory(),defaultLogs=Files::logDirectory();
     check(QFileInfo(defaultPackets).isDir()&&QFileInfo(defaultLogs).isDir(),"fresh packet and log directories are created outside program installation");
     check(defaultPackets.startsWith(owned.path())&&defaultLogs.startsWith(owned.path()),"test defaults remain inside owned directory");
-    check(!Files::selectionConfirmed(),"fresh defaults are offered for user confirmation");
+    auto startupPrompt=[&](bool expected) {
+        const auto acceptance=qgetenv("FLOWGUARD_ACCEPTANCE");
+        const bool hadAcceptance=qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE");
+        qunsetenv("FLOWGUARD_ACCEPTANCE");
+        bool prompted=false;
+        {
+            flowguard::MainWindow window("storage-startup-test");
+            window.setAttribute(Qt::WA_DontShowOnScreen);
+            QTimer dismiss;
+            QObject::connect(&dismiss,&QTimer::timeout,&window,[&] {
+                if(auto *dialog=window.findChild<QDialog *>("storageLocationsDialog")) {
+                    prompted=true;dialog->reject();
+                }
+            });
+            dismiss.start(10);window.show();
+            auto *action=window.findChild<QAction *>("storageLocationsAction");
+            check(QTest::qWaitFor([&]{return action&&action->isEnabled();},6000),"startup controls settle");
+            QTest::qWait(250);
+            check(prompted==expected,expected?"invalid directory still prompts for correction":"usable storage launches without a redundant setup dialog");
+            window.close();
+            check(QTest::qWaitFor([&]{return !window.isVisible();},6000),"startup-check window closes");
+        }
+        if(hadAcceptance)qputenv("FLOWGUARD_ACCEPTANCE",acceptance);else qunsetenv("FLOWGUARD_ACCEPTANCE");
+    };
+    startupPrompt(false); // Exercise production startup, without the acceptance suppression flag.
     check(Files::setDirectories({},defaultPackets).isEmpty(),"user can explicitly disable logging");
     QString error;
     check(Files::prepare({},error).isEmpty()&&!error.isEmpty(),"unset packet directory cannot begin writing");
@@ -33,6 +57,47 @@ int main(int argc,char **argv) {
         dormant.event("not-configured"); dormant.sample({}, {},0); dormant.finish({});
         check(dormant.directory().isEmpty()&&dormant.error().isEmpty(),"unconfigured recorder does not attempt any file writes");
     }
+    {
+        // Invalid initial logging must be recoverable in the same window, without a restart.
+        {QSettings settings(config,QSettings::IniFormat);settings.setValue("logRoot",blocked);settings.sync();}
+        flowguard::MainWindow window("log-retry-test");window.setAttribute(Qt::WA_DontShowOnScreen);window.show();
+        auto *action=window.findChild<QAction *>("storageLocationsAction");
+        check(QTest::qWaitFor([&]{return action&&action->isEnabled();},6000),"failed-log startup settles");
+        check(window.logDirectory().isEmpty(),"failed startup is not exposed as an active log directory");
+        const auto retryRoot=owned.path()+"/重试日志";
+        QTimer::singleShot(0,&window,[&] {
+            auto *dialog=window.findChild<QDialog *>("storageLocationsDialog");
+            check(dialog!=nullptr,"log recovery settings opens");if(!dialog)return;
+            dialog->findChild<QLineEdit *>("storageLogRoot")->setText(retryRoot);
+            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        });
+        if(action)action->trigger();
+        check(QTest::qWaitFor([&]{return window.logDirectory().startsWith(retryRoot+"/");},6000),
+              "corrected log directory starts recording without restarting the application");
+        QTest::qWait(1100); // Include the asynchronous recorder sample/error refresh.
+        bool staleWarning=false;
+        for(auto *label:window.findChildren<QLabel *>())
+            staleWarning=staleWarning || label->text().contains(QStringLiteral("日志目录已修改，下次启动生效")) || label->text().contains(blocked);
+        check(!staleWarning,"successful retry clears old error and does not request a restart");
+        const auto run=window.logDirectory();
+        check(QFileInfo::exists(run+"/resources.csv"),"retried GUI logging creates resource data");
+        const auto nextRoot=owned.path()+"/下一次日志";
+        QTimer::singleShot(0,&window,[&] {
+            auto *dialog=window.findChild<QDialog *>("storageLocationsDialog");
+            check(dialog!=nullptr,"running log destination settings opens");if(!dialog)return;
+            dialog->findChild<QLineEdit *>("storageLogRoot")->setText(nextRoot);
+            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        });
+        if(action)action->trigger();
+        check(window.logDirectory()==run&&QDir(nextRoot).entryList(QDir::Dirs|QDir::NoDotAndDotDot).isEmpty(),
+              "healthy active log is not moved or reopened when changing the next-run directory");
+        window.close();check(QTest::qWaitFor([&]{return !window.isVisible();},6000),"retried-log window closes");
+        QFile result(run+"/result.json");
+        check(result.open(QIODevice::ReadOnly),"retried GUI run has an exit record");
+        check(QJsonDocument::fromJson(result.readAll()).object()["logging_error"].toString().isEmpty(),
+              "GUI retry exit record has no stale logging error");
+    }
+    check(Files::setDirectories({},defaultPackets).isEmpty(),"restore explicit log opt-out for following scenarios");
     {
         flowguard::MainWindow window("storage-selection-test");window.setAttribute(Qt::WA_DontShowOnScreen);window.show();
         auto *action=window.findChild<QAction *>("storageLocationsAction");
@@ -100,6 +165,7 @@ int main(int argc,char **argv) {
     Files::useConfigurationFile(migrated,portable,user);
     check(Files::initialize().isEmpty()&&Files::defaultDirectory()==oldPackets&&Files::logDirectory()==oldLogs,
           "old user-setting PCAP location and portable log setting migrate together");
+    startupPrompt(false);
     check(Files::setDirectories({},defaultPackets).isEmpty(),"new choice overrides migrated settings");
     check(Files::initialize().isEmpty()&&Files::logDirectory().isEmpty()&&Files::defaultDirectory()==defaultPackets,
           "reinitialization preserves new choices and explicit empty values");
@@ -107,6 +173,7 @@ int main(int argc,char **argv) {
     Files::useConfigurationFile(owned.path()+"/失效升级/storage.ini",portable,user);
     check(!Files::initialize().isEmpty()&&Files::defaultDirectory()==oldPackets&&!QFileInfo::exists(oldPackets),
           "missing migrated custom directory is retained with an error and not silently recreated");
+    startupPrompt(true);
     Files::useConfigurationFile(blocked+"/storage.ini");
     check(!Files::setDirectories({},owned.path()+"/新选择").isEmpty(),"configuration write failure is explicit");
     std::cout<<"STORAGE_SELECTION "<<(failures?"FAIL":"PASS")<<'\n';return failures?1:0;
