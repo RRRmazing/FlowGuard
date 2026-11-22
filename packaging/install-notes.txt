@@ -1,0 +1,21 @@
+FlowGuard 0.1.0 - 课程项目预览版 / Course project preview
+
+系统要求：Windows 10 1809 或更新的 x64 Windows。尚未验证 Windows on ARM。
+请先从 https://npcap.com/ 下载并安装 Npcap；本安装包不包含 Npcap 驱动或 DLL。
+Npcap 驱动安装需要管理员权限。如果选择了仅管理员访问，抓包也需要相应权限。
+安装程序会检测 Microsoft Visual C++ x64 运行库，缺失时启动随包提供的微软官方安装程序，可能提示管理员授权。
+
+程序安装位置、报文目录与日志目录相互独立。
+首次安装可以选择报文与日志目录；发现已有 storage.ini 时保留设置并跳过该页面。
+之后可通过程序的“保存设置”修改。升级和卸载保留用户配置及抓包、日志数据。
+
+Requirements: x64 Windows 10 1809 or newer. Windows on ARM has not been tested.
+Install Npcap from https://npcap.com/ before continuing. Npcap is not bundled.
+The official Microsoft Visual C++ x64 redistributable is included and is installed if needed; elevation may be requested.
+Existing storage settings and user data are preserved. Change data folders in the application's storage settings.
+
+本软件按 GPL-3.0-only 发布；第三方组件遵循各自许可证。
+This application is released under GPL-3.0-only; third-party components retain their own licenses.
+源码 / Source: https://github.com/RRRmazing/FlowGuard
+当前尚未完成至少 24 小时稳定性及无开发环境的新电脑验收。
+The 24-hour stability test and clean-machine acceptance are not complete.

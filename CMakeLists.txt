@@ -62,6 +62,10 @@ qt_add_executable(FlowGuard
     src/core/packet_types.h)
 target_include_directories(FlowGuard PRIVATE src)
 target_link_libraries(FlowGuard PRIVATE Qt6::Widgets flowguard_capture)
+if(MSVC)
+    target_link_options(FlowGuard PRIVATE "/DELAYLOAD:wpcap.dll")
+    target_link_libraries(FlowGuard PRIVATE delayimp)
+endif()
 flowguard_configure_cpp(FlowGuard)
 file(GENERATE OUTPUT "$<TARGET_FILE_DIR:FlowGuard>/FlowGuard使用指南.html"
     INPUT "${CMAKE_CURRENT_SOURCE_DIR}/docs/FlowGuard使用指南.html")

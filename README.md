@@ -1,5 +1,11 @@
 # FlowGuard 流量哨兵
 
+## Windows 安装包与许可
+
+安装包在 [GitHub Releases](https://github.com/RRRmazing/FlowGuard/releases) 下载。先从 [Npcap 官网](https://npcap.com/) 安装驱动，再运行安装包。安装向导提供中英文界面、程序安装位置、首次使用的数据目录及可选桌面快捷方式；已有保存配置与用户数据会保留。微软官方 Visual C++ x64 运行库随包提供，缺失时安装可能要求管理员授权。
+
+本项目按 [GPL-3.0-only](LICENSE) 发布，第三方组件保留各自许可，见 [依赖说明](THIRD_PARTY_NOTICES.md)。安装包构建流程见 [packaging/README.md](packaging/README.md)。当前为课程项目预览版，未完成无开发环境的新电脑安装与至少 24 小时稳定性验收。
+
 ## 双方功能融合分支
 
 当前融合异常预警与分段保存，以及完整 PCAP 分页、协议字段和图表交互。新用户默认数据位于系统文档目录的 FlowGuard/Captures 与 FlowGuard/Logs，有效配置直接启动，不再强制弹窗；位置可在保存设置中修改，与程序安装目录分开，旧保存位置优先迁移保留。分支、验证与人工检查见 [融合验收记录](docs/integration-acceptance.md)。

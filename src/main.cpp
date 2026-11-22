@@ -15,11 +15,39 @@
 #include <QUdpSocket>
 #include <pcap.h>
 
+#include <QMessageBox>
+#include <windows.h>
+#include <string>
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("FlowGuard"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
+
+    // Load Npcap before the first call to a delay-loaded pcap function.
+    wchar_t systemDirectory[MAX_PATH] = {};
+    const UINT length = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        QMessageBox::critical(nullptr, QStringLiteral("启动失败"),
+                            QStringLiteral("无法获取 Windows 系统目录。"));
+        return 1;
+    }
+
+    const std::wstring npcapLibrary =
+        std::wstring(systemDirectory) + L"\\Npcap\\wpcap.dll";
+
+    if (!LoadLibraryExW(npcapLibrary.c_str(), nullptr,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                    LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+        const DWORD error = GetLastError();
+        QMessageBox::critical(
+            nullptr, QStringLiteral("无法加载 Npcap"),
+            QStringLiteral("请从 https://npcap.com/ 安装或修复 x64 Npcap 后重试。\n"
+                        "Windows 错误码：%1")
+                .arg(static_cast<qulonglong>(error)));
+        return 1;
+    }
     const QString captureVersion = QString::fromLocal8Bit(pcap_lib_version());
     // Acceptance runs must not read or modify a real user's storage settings.
     std::unique_ptr<QTemporaryDir> acceptanceSettings;
