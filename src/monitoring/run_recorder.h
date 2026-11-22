@@ -11,6 +11,7 @@ class RunRecorder
 {
   public:
     bool open(const QString &root);
+    bool isOpen() const { return opened_ && !finished_; }
     void event(const QString &name, const QJsonObject &detail = {});
     void sample(const ProcessingSnapshot &, const ResourceSample &, double guiDelayMs, std::uint64_t listEvicted = 0);
     void finish(const ProcessingSnapshot &);
@@ -30,9 +31,12 @@ class RunRecorder
   private:
     bool write(QFile &, const QByteArray &);
     void metadata(const QString &, QJsonObject);
+    void reset();
+    bool failedOpen();
     QString directory_, error_, start_;
     QFile resources_, events_;
     QElapsedTimer timer_;
     bool finished_ = false;
+    bool opened_ = false;
 };
 } // namespace flowguard

@@ -71,32 +71,39 @@ DeviceChoice describeDevice(const CaptureDevice &dev, const DeviceSystemInfo &sy
         choice.description = QStringLiteral("设备未提供型号说明");
     const QString lower = choice.description.toLower();
     const bool bluetooth = lower.contains("bluetooth") || lower.contains(QStringLiteral("蓝牙"));
+    const bool wanMiniport=lower.contains("wan miniport");
     // These are display hints only; capture uses the unchanged Npcap ID, never the classification.
     const bool virtualHint = lower.contains("virtual") || lower.contains("vpn") || lower.contains("tunnel") ||
-                             lower.contains("tap-") || lower.contains("vnic") || lower.contains("host-only");
+                             lower.contains("tap-") || lower.contains("vnic") || lower.contains("host-only") || wanMiniport;
+    const bool virtualInterface=virtualHint || system.type==QNetworkInterface::Virtual || system.hardwareInterface==false;
+    const bool physicalConnected=system.running && system.mediaConnected.value_or(true);
     QString type = QStringLiteral("其他网卡");
     if (dev.loopback)
         type = QStringLiteral("本机回环");
     else if (bluetooth)
         type = QStringLiteral("蓝牙网络");
-    else if (virtualHint || system.type == QNetworkInterface::Virtual)
-        type = QStringLiteral("虚拟/隧道网卡");
+    else if (virtualInterface)
+        type = wanMiniport ? QStringLiteral("虚拟/WAN接口") : QStringLiteral("虚拟/隧道网卡");
     else if (system.type == QNetworkInterface::Wifi)
         type = QStringLiteral("无线网卡");
     else if (system.type == QNetworkInterface::Ethernet)
         type = QStringLiteral("有线以太网");
-    const QString connection = system.matched ? (system.running   ? QStringLiteral("已连接")
-                                                 : system.enabled ? QStringLiteral("未连接")
-                                                                  : QStringLiteral("未启用"))
-                                              : QStringLiteral("状态未知");
+    QString connection=QStringLiteral("状态未知");
+    if(system.matched) {
+        if(!system.enabled) connection=QStringLiteral("未启用");
+        else if(dev.loopback || virtualInterface) connection=system.running?QStringLiteral("就绪"):QStringLiteral("未就绪");
+        else if(physicalConnected) connection=QStringLiteral("已连接");
+        else if(system.mediaConnected==true) connection=QStringLiteral("已连接（未就绪）");
+        else connection=QStringLiteral("未连接");
+    }
     const QString name = dev.loopback             ? QStringLiteral("本机回环")
                          : !system.name.isEmpty() ? system.name
                                                   : choice.description;
     choice.title = name + " · " + type + " · " + connection;
-    if (system.running && !virtualHint && !bluetooth &&
+    if (system.matched && system.enabled && physicalConnected && !virtualInterface && !bluetooth && !dev.loopback &&
         (system.type == QNetworkInterface::Wifi || system.type == QNetworkInterface::Ethernet))
         choice.priority = 0;
-    else if (!virtualHint && !bluetooth &&
+    else if (!virtualInterface && !bluetooth && !dev.loopback &&
              (system.type == QNetworkInterface::Wifi || system.type == QNetworkInterface::Ethernet))
         choice.priority = 1;
     else if (dev.loopback)

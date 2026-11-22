@@ -1,5 +1,19 @@
 # FlowGuard 流量哨兵
 
+## 双方功能融合分支
+
+当前融合异常预警与分段保存，以及完整 PCAP 分页、协议字段和图表交互。新用户默认数据位于系统文档目录的 FlowGuard/Captures 与 FlowGuard/Logs，有效配置直接启动，不再强制弹窗；位置可在保存设置中修改，与程序安装目录分开，旧保存位置优先迁移保留。分支、验证与人工检查见 [融合验收记录](docs/integration-acceptance.md)。
+
+## 报文保存交互更新
+
+开始采集时统一弹出两个直接选项：“立即开始保存报文”或“暂不开始保存报文”，选择即开始，以本次选择为准；关闭弹窗保持原状态。“准备实时采集”菜单已移除，PCAP 仅通过文件菜单或 Ctrl+O 打开。
+
+顶部“保存设置 → 数据保存位置…”可修改默认目录。可提前开启保存等待，从第一包记录，也可采集中途开启保存；目录未设置或失效时允许选择后继续当前采集。结束后确认正式文件名和位置；取消最终保存会丢弃本段。PCAP 与日志目录统一记在当前用户应用数据目录的 `FlowGuard/storage.ini`；兼容迁移旧版程序旁 INI 和用户设置中的 PCAP 目录，失效的自选目录要求重选，不静默换盘。PCAP 分析模式禁用保存。详见 [保存流程说明](docs/recording-workflow.md)。
+
+## 预警监测扩展
+
+新增侧边“预警监测”：支持 SYN 请求异常、ICMP/ICMPv6 回声请求异常、TCP 端口扫描、UDP 高频流量和 ARP 地址映射变化。实时采集与 PCAP 文件共用后台检测；会话中可修改规则，PCAP 自动重新检测受影响规则。现有统计图表不增加内容。规则口径、边界和固定样本验收见 [预警监测说明](docs/alert-monitoring.md)。
+
 ## 第三阶段 Qt 接入分支
 
 本分支已接入报文工作台、统计图表、PCAP 导入/回放/后续报文保存、显示筛选、资源监控和持续日志。
@@ -130,6 +144,7 @@ ctest --test-dir build/windows-msvc -R "^capture_" --output-on-failure --no-test
 保留各自正常的 Git 作者身份，功能分支通过审查和验收后合并到 main。
 
 阶段指南见 [docs/stages.md](docs/stages.md)，接口约定见 [docs/interfaces.md](docs/interfaces.md)。
+报文工作台右下角按协议展示关键字段与含义，支持滚动和复制；范围与验收方式见 [报文解读说明](docs/packet-interpretation.md)。
 
 ## 第二阶段后台交付
 

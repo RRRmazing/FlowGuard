@@ -1,6 +1,9 @@
 // Stage-3 integration: Xie Fuxiang; AI-assisted, pending user review.
 #include "core/packet_types.h"
 #include "ui/main_window.h"
+#include "storage/recording_files.h"
+#include <QTemporaryDir>
+#include <memory>
 
 #include <QApplication>
 #include <QDebug>
@@ -18,6 +21,17 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("FlowGuard"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
     const QString captureVersion = QString::fromLocal8Bit(pcap_lib_version());
+    // Acceptance runs must not read or modify a real user's storage settings.
+    std::unique_ptr<QTemporaryDir> acceptanceSettings;
+    const auto arguments=app.arguments();
+    if(arguments.contains("--smoke-test") || arguments.contains("--accept-file") || arguments.contains("--accept-live")) {
+        acceptanceSettings=std::make_unique<QTemporaryDir>();
+        if(!acceptanceSettings->isValid()) return 2;
+        flowguard::RecordingFiles::useConfigurationFile(acceptanceSettings->path()+"/storage.ini");
+        qputenv("FLOWGUARD_ACCEPTANCE","1");
+        if(qEnvironmentVariable("FLOWGUARD_LOG_ROOT").isEmpty())
+            qputenv("FLOWGUARD_LOG_ROOT",(acceptanceSettings->path()+"/logs").toUtf8());
+    }
     flowguard::MainWindow window(captureVersion);
     window.show();
 

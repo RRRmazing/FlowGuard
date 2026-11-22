@@ -45,6 +45,24 @@ int main(int argc, char **argv)
         describeDevice(virtualDevice, {"Host-only", QNetworkInterface::Ethernet, true, true, true});
     check(virtualChoice.priority > wifiChoice.priority && virtualChoice.title.contains(QStringLiteral("虚拟")),
           "virtual Ethernet not preferred over active physical interface");
+    CaptureDevice wan;wan.id="wan-miniport";wan.description="WAN Miniport (IPv6)";
+    DeviceSystemInfo wanInfo{"Local connection",QNetworkInterface::Ethernet,true,true,true};
+    wanInfo.hardwareInterface=false;wanInfo.mediaConnected=true;
+    const auto wanChoice=describeDevice(wan,wanInfo);
+    check(wanChoice.title.contains(QStringLiteral("虚拟/WAN接口"))&&wanChoice.title.contains(QStringLiteral("就绪"))&&
+        !wanChoice.title.contains(QStringLiteral("已连接"))&&wanChoice.priority>wifiChoice.priority,
+        "WAN miniport operational up is not a connected physical Ethernet adapter");
+    check(describeDevice(wan,{"WAN",QNetworkInterface::Ethernet,true,true,true}).title.contains(QStringLiteral("虚拟/WAN接口")),
+        "WAN classification falls back to description when hardware metadata unavailable");
+    CaptureDevice software;software.id="software";software.description="Ethernet-compatible interface";
+    check(describeDevice(software,wanInfo).title.contains(QStringLiteral("虚拟")),"OS software-interface flag overrides Ethernet type");
+    DeviceSystemInfo disconnected{"Ethernet",QNetworkInterface::Ethernet,true,true,true};
+    disconnected.hardwareInterface=true;disconnected.mediaConnected=false;
+    const auto unplugged=describeDevice(ethernet,disconnected);
+    check(unplugged.title.contains(QStringLiteral("未连接"))&&unplugged.priority>wifiChoice.priority,
+        "disconnected physical media is never preferred solely due to operational up");
+    wanInfo.enabled=false;
+    check(describeDevice(wan,wanInfo).title.contains(QStringLiteral("未启用")),"disabled virtual interface is not labeled ready");
     DeviceSelector selector;
     selector.setChoices({wifiChoice, wiredChoice, virtualChoice});
     check(selector.count() == 3 && selector.currentData().toString() == "wifi-id",
@@ -128,6 +146,27 @@ int main(int argc, char **argv)
     blocker.close();
     RunRecorder bad;
     check(!bad.open(blocker.fileName()) && !bad.error().isEmpty(), "log creation failure visible");
+    const auto initialError=bad.error();
+    check(!bad.isOpen() && bad.directory().isEmpty() && bad.elapsed()==0,
+          "failed initialization clears the active path and clock");
+    bad.event("ignored_after_failure");bad.sample(s,first,0);bad.finish(s);
+    check(bad.error()==initialError && !bad.isOpen(), "inactive writes do not replace the original creation error");
+    check(bad.open(temp.path()+"/retry") && bad.isOpen() && bad.error().isEmpty(),
+          "retry with a valid directory clears the previous failure");
+    const auto retriedRun=bad.directory();
+    check(bad.open(temp.path()+"/duplicate") && bad.directory()==retriedRun,
+          "duplicate open does not replace a running log");
+    bad.sample(s,first,0);bad.finish(s);
+    check(!bad.isOpen(), "finished run is no longer active");
+    QFile retriedResult(retriedRun+"/result.json");
+    check(retriedResult.open(QIODevice::ReadOnly), "retried run gets an exit record");
+    const auto retriedJson=QJsonDocument::fromJson(retriedResult.readAll()).object();
+    check(retriedJson["logging_error"].toString().isEmpty() && retriedJson["total_packets"].toString()=="18",
+          "retried run metadata has no stale error and retains session totals");
+    check(bad.open(temp.path()+"/after-finish"), "same recorder can start again after finish");
+    const auto reopenedRun=bad.directory();bad.finish(s);
+    check(reopenedRun!=retriedRun && QFile::exists(reopenedRun+"/result.json"),
+          "new run resets the finished flag and finalizes independently");
     std::cout << "STAGE3_SUPPORT " << (failures ? "FAIL" : "PASS") << '\n';
     return failures ? 1 : 0;
 }

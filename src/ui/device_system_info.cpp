@@ -37,7 +37,13 @@ QMap<QString, DeviceSystemInfo> systemDeviceInfo()
         info.running = adapter->OperStatus == IfOperStatusUp;
         MIB_IF_ROW2 row{};
         row.InterfaceLuid = adapter->Luid;
-        info.enabled = GetIfEntry2(&row) == NO_ERROR ? row.AdminStatus == NET_IF_ADMIN_STATUS_UP : true;
+        const bool rowKnown=GetIfEntry2(&row)==NO_ERROR;
+        info.enabled = rowKnown ? row.AdminStatus == NET_IF_ADMIN_STATUS_UP : true;
+        if(rowKnown) {
+            info.hardwareInterface=bool(row.InterfaceAndOperStatusFlags.HardwareInterface);
+            if(row.MediaConnectState==MediaConnectStateConnected) info.mediaConnected=true;
+            else if(row.MediaConnectState==MediaConnectStateDisconnected) info.mediaConnected=false;
+        }
         if (adapter->IfType == IF_TYPE_IEEE80211)
             info.type = QNetworkInterface::Wifi;
         else if (adapter->IfType == IF_TYPE_ETHERNET_CSMACD)

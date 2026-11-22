@@ -41,6 +41,9 @@ struct PacketRecord {
     std::optional<std::uint16_t> sourcePort;
     std::optional<std::uint16_t> destinationPort;
     std::optional<std::uint8_t> tcpFlags;
+    std::optional<std::uint8_t> icmpType, icmpCode;
+    std::optional<std::uint16_t> arpOpcode;
+    std::string arpSenderMac; // ARP payload address, not the Ethernet frame sender.
     bool isDns = false;
     std::string summary;
     std::string diagnostic;

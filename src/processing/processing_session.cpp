@@ -37,6 +37,7 @@ struct ProcessingSession::Impl {
     ProcessingSnapshot current;
     ProcessingOptions options;
     StatisticsEngine statistics;
+    AlertMonitor alerts;
     StatisticsSnapshot previous;
     std::deque<ParsedPacket> pending;
     std::deque<TimeSample> liveHistory;
@@ -59,7 +60,7 @@ struct ProcessingSession::Impl {
         std::lock_guard<std::mutex> lock(mutex);
         return current.state == ProcessingState::Running || current.state == ProcessingState::Paused;
     }
-    OperationResult initialize(const ProcessingOptions& value, ProcessingSource source)
+    OperationResult initialize(const ProcessingOptions& value, ProcessingSource source, const std::filesystem::path& path = {})
     {
         if (!std::isfinite(value.replaySpeed) || value.replaySpeed < 0.1 || value.replaySpeed > 100 ||
             value.pendingLimit < 1 || value.pendingLimit > 2000 || value.maxSavedBytes < 24 ||
@@ -76,10 +77,12 @@ struct ProcessingSession::Impl {
         current.savingRequested = savePath.has_value();
         writerOpen = false; wantSave = false; stopping = false;
         lastSample = Steady::now();
+        alerts.begin(id, path);
         return {};
     }
     OperationResult fail(OperationResult error)
     {
+        alerts.finish();
         std::lock_guard<std::mutex> lock(mutex);
         current.state = ProcessingState::Failed; current.error = std::move(error);
         return current.error;
@@ -94,6 +97,7 @@ struct ProcessingSession::Impl {
         std::lock_guard<std::mutex> lock(mutex);
         current.savingActive = false; current.savingRequested = false;
         if (!error.ok()) current.savingError = std::move(error);
+        wake.notify_all();
     }
     void savingCommands()
     {
@@ -109,7 +113,11 @@ struct ProcessingSession::Impl {
             closeSave();
             wantSave = appliedPath.has_value();
             std::lock_guard<std::mutex> lock(mutex);
-            current.savingError = {}; current.savingRequested = wantSave;
+            if (wantSave) {
+                current.savingError = {}; current.savedSegmentPackets = 0;
+                current.savedFirstTimestamp.reset(); current.savedLastTimestamp.reset();
+            }
+            current.savingRequested = wantSave;
         }
         if (wantSave && !writerOpen && infoKnown) {
             PcapWriteOptions writeOptions;
@@ -132,10 +140,15 @@ struct ProcessingSession::Impl {
         }
         savingCommands();
         auto parsed = parsePacket(packet, ++sequence);
+        alerts.add(parsed.record);
         if (writerOpen) {
             const auto result = writer.write(packet);
             if (!result.ok()) closeSave(result);
-            else { std::lock_guard<std::mutex> lock(mutex); ++current.savedPackets; }
+            else {
+                std::lock_guard<std::mutex> lock(mutex); ++current.savedPackets; ++current.savedSegmentPackets;
+                if (!current.savedFirstTimestamp) current.savedFirstTimestamp = packet.timestamp;
+                current.savedLastTimestamp = packet.timestamp;
+            }
         }
         std::lock_guard<std::mutex> lock(mutex);
         const auto& record = parsed.record;
@@ -159,6 +172,7 @@ struct ProcessingSession::Impl {
     }
     void sample(Steady::time_point now)
     {
+        alerts.advance(Wall::now());
         if (writerOpen) {
             const auto result = writer.flush();
             if (!result.ok()) closeSave(result);
@@ -232,9 +246,11 @@ struct ProcessingSession::Impl {
             try { fail({ErrorCode::InvalidState, "unexpected processing worker failure"}); } catch (...) {}
         }
         capture.stop(); reader.close(); closeSave();
+        alerts.finish();
         std::lock_guard<std::mutex> lock(mutex);
         if (current.state != ProcessingState::Failed)
             current.state = completed ? ProcessingState::Completed : ProcessingState::Stopped;
+        wake.notify_all();
     }
 };
 
@@ -247,23 +263,23 @@ OperationResult ProcessingSession::startLive(const CaptureOptions& captureOption
     auto result = impl_->initialize(options, ProcessingSource::Live);
     if (!result.ok()) return result;
     result = impl_->capture.start(captureOptions);
-    if (!result.ok()) return impl_->fail(result);
+    if (!result.ok()) {impl_->closeSave();return impl_->fail(result);}
     impl_->infoKnown = false; impl_->sourceInfo.snapshotLength = captureOptions.snapshotLength;
     try { impl_->worker = std::thread([this] { impl_->run(); }); }
-    catch (const std::exception& error) { impl_->capture.stop(); return impl_->fail({ErrorCode::ResourceLimit, error.what()}); }
+    catch (const std::exception& error) { impl_->capture.stop(); impl_->closeSave(); return impl_->fail({ErrorCode::ResourceLimit, error.what()}); }
     return {};
 }
 OperationResult ProcessingSession::startFile(const std::filesystem::path& path, const ProcessingOptions& options)
 {
     if (impl_->active()) return invalid("processing session is already active");
     stop();
-    auto result = impl_->initialize(options, ProcessingSource::File);
+    auto result = impl_->initialize(options, ProcessingSource::File, path);
     if (!result.ok()) return result;
     result = impl_->reader.open(path);
-    if (!result.ok()) return impl_->fail(result);
+    if (!result.ok()) {impl_->closeSave();return impl_->fail(result);}
     impl_->sourceInfo = impl_->reader.info(); impl_->infoKnown = true;
     try { impl_->worker = std::thread([this] { impl_->run(); }); }
-    catch (const std::exception& error) { impl_->reader.close(); return impl_->fail({ErrorCode::ResourceLimit, error.what()}); }
+    catch (const std::exception& error) { impl_->reader.close(); impl_->closeSave(); return impl_->fail({ErrorCode::ResourceLimit, error.what()}); }
     return {};
 }
 OperationResult ProcessingSession::pause()
@@ -289,6 +305,8 @@ OperationResult ProcessingSession::enableSaving(const std::filesystem::path& pat
         return invalid("saving requires an active session");
     if (path.empty() || maxBytes < 24) return {ErrorCode::InvalidArgument, "invalid save path or limit"};
     impl_->savePath = path; impl_->saveLimit = maxBytes; ++impl_->saveRevision;
+    impl_->current.savingRequested = true;
+    impl_->current.savingError = {};
     impl_->wake.notify_all(); return {};
 }
 void ProcessingSession::disableSaving()
@@ -300,6 +318,17 @@ void ProcessingSession::stop()
 {
     impl_->stopping = true; impl_->wake.notify_all();
     if (impl_->worker.joinable()) impl_->worker.join();
+}
+OperationResult ProcessingSession::finishSaving()
+{
+    std::unique_lock<std::mutex> lock(impl_->mutex);
+    impl_->savePath.reset(); const auto revision = ++impl_->saveRevision; impl_->wake.notify_all();
+    impl_->wake.wait(lock,[&] {
+        const bool inactive=impl_->current.state!=ProcessingState::Running && impl_->current.state!=ProcessingState::Paused;
+        const bool closed=!impl_->current.savingActive && !impl_->current.savingRequested;
+        return closed && (inactive || impl_->appliedRevision>=revision);
+    });
+    return impl_->current.savingError;
 }
 ProcessingSnapshot ProcessingSession::snapshot() const
 {
@@ -325,6 +354,12 @@ ProcessingSnapshot ProcessingSession::snapshot() const
     if (result.source == ProcessingSource::Live) result.capture = impl_->capture.status();
     return result;
 }
+AlertSnapshot ProcessingSession::alertSnapshot() const { return impl_->alerts.snapshot(); }
+OperationResult ProcessingSession::configureAlerts(const AlertRules& rules) {
+    if (!impl_->alerts.configure(rules)) return {ErrorCode::InvalidArgument,"invalid alert window or threshold"};
+    return {};
+}
+void ProcessingSession::pauseAlerts(bool paused) { impl_->alerts.setPaused(paused); }
 PacketBatch ProcessingSession::takePackets(std::size_t maxPackets)
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);

@@ -1,3 +1,4 @@
+// Original parser: Xie Fuxiang. Header-detail additions: He Junjie, AI-assisted.
 #include "parser/packet_parser.h"
 #include <algorithm>
 #include <iomanip>
@@ -14,6 +15,7 @@ struct Reader {
     }
     unsigned u8(std::size_t p) const { need(p, 1); return b[p]; }
     unsigned u16(std::size_t p) const { need(p, 2); return (b[p] << 8) | b[p + 1]; }
+    std::uint32_t u32(std::size_t p) const { return (std::uint32_t(u16(p)) << 16) | u16(p + 2); }
 };
 void malformed(const char* message) { throw Failure{ParseStatus::Malformed, message}; }
 std::string mac(const Reader& r, std::size_t p) {
@@ -105,6 +107,10 @@ void transport(Reader r, std::size_t p, std::size_t end, unsigned protocol, bool
         if (protocol == 1 || protocol == 58) {
             out.transport = protocol == 1 ? TransportProtocol::Icmp : TransportProtocol::Icmpv6;
             r.need(p,4);
+            out.icmpType = static_cast<std::uint8_t>(r.u8(p));
+            out.icmpCode = static_cast<std::uint8_t>(r.u8(p+1));
+            if ((protocol == 1 && (*out.icmpType == 8 || *out.icmpType == 0)) ||
+                (protocol == 58 && (*out.icmpType == 128 || *out.icmpType == 129))) r.need(p,8);
         } else if (protocol != 59) { out.status = ParseStatus::Unsupported; out.diagnostic = "unsupported IP protocol"; }
         return;
     }
@@ -140,6 +146,8 @@ static PacketRecord parseRecord(const RawPacket& packet, std::uint64_t sequence)
             const auto h = r.u8(p+4), a = r.u8(p+5); r.need(p+8,2*(h+a));
             if (r.u16(p) != 1 || r.u16(p+2) != 0x0800 || h != 6 || a != 4) throw Failure{ParseStatus::Unsupported,"unsupported ARP address format"};
             out.sourceIp = ip(r,p+14,false); out.destinationIp = ip(r,p+24,false);
+            out.arpOpcode = static_cast<std::uint16_t>(r.u16(p+6));
+            out.arpSenderMac = mac(r,p+8);
             out.summary = "ARP opcode=" + std::to_string(r.u16(p+6));
         } else if (type == 0x0800 || type == 0x86dd) {
             const bool v6 = type == 0x86dd; const auto start = p;
@@ -204,6 +212,16 @@ static PacketRecord parseRecord(const RawPacket& packet, std::uint64_t sequence)
 namespace {
 ProtocolField field(std::string name, std::string value) { return {std::move(name),std::move(value),{}}; }
 std::string number(unsigned value) { return std::to_string(value); }
+std::string hex16(unsigned value) {
+    std::ostringstream s; s << "0x" << std::hex << std::setw(4) << std::setfill('0') << value; return s.str();
+}
+std::string headerBytes(const Reader& r, std::size_t p, std::size_t size) {
+    r.need(p,size); std::ostringstream s;
+    const auto shown=std::min(size,std::size_t{64});
+    for (std::size_t i=0;i<shown;++i) { if (i) s << ' '; s << std::hex << std::setw(2) << std::setfill('0') << r.u8(p+i); }
+    if (shown<size) s << " ... (first 64 bytes; header has " << std::dec << size << " bytes)";
+    return s.str();
+}
 // All trees have a fixed maximum shape: at most two VLAN groups, no payload
 // text or unbounded DNS record expansion. A final budget check protects future additions.
 std::vector<ProtocolField> fields(const RawPacket& packet, const PacketRecord& record) {
@@ -225,6 +243,8 @@ std::vector<ProtocolField> fields(const RawPacket& packet, const PacketRecord& r
                 arp.children.push_back(field("Sender MAC",mac(r,p+8))); arp.children.push_back(field("Target MAC",mac(r,p+18)));
                 arp.children.push_back(field("Sender IP",record.sourceIp)); arp.children.push_back(field("Target IP",record.destinationIp));
             }
+            arp.children.push_back(field("Hardware address length",number(r.u8(p+4))));
+            arp.children.push_back(field("Protocol address length",number(r.u8(p+5))));
             result.push_back(std::move(arp)); return result;
         }
         if (!record.ipVersion) return result;
@@ -232,22 +252,112 @@ std::vector<ProtocolField> fields(const RawPacket& packet, const PacketRecord& r
         ProtocolField network{v6 ? "IPv6" : "IPv4","",{field("Source IP",record.sourceIp),field("Destination IP",record.destinationIp),field("Version",number(*record.ipVersion))}};
         if (record.ttlOrHopLimit) network.children.push_back(field(v6 ? "Hop limit" : "TTL",number(*record.ttlOrHopLimit)));
         if (record.ipProtocol) network.children.push_back(field("Protocol",number(*record.ipProtocol)));
+        if (v6) {
+            r.need(p,40);
+            const auto word=r.u32(p);
+            network.children.push_back(field("Traffic class",number((word>>20)&255)));
+            network.children.push_back(field("DSCP",number((word>>22)&63)));
+            network.children.push_back(field("ECN",number((word>>20)&3)));
+            network.children.push_back(field("Flow label",number(word&0xfffff)));
+            network.children.push_back(field("Payload length",number(r.u16(p+4))));
+            network.children.push_back(field("Next header",number(r.u8(p+6))));
+        } else {
+            r.need(p,20);
+            network.children.push_back(field("IHL",number(r.u8(p)&15)));
+            network.children.push_back(field("Header length",number((r.u8(p)&15)*4)));
+            network.children.push_back(field("Type of service",number(r.u8(p+1))));
+            network.children.push_back(field("DSCP",number(r.u8(p+1)>>2)));
+            network.children.push_back(field("ECN",number(r.u8(p+1)&3)));
+            network.children.push_back(field("Total length",number(r.u16(p+2))));
+            network.children.push_back(field("Identification",number(r.u16(p+4))));
+            const auto f=r.u16(p+6);
+            network.children.push_back({"Flags",number(f>>13),{field("Reserved",number((f>>15)&1)),
+                field("DF",number((f>>14)&1)),field("MF",number((f>>13)&1))}});
+            network.children.push_back(field("Fragment offset",number(f&8191)));
+            network.children.push_back(field("Fragment offset (bytes)",number((f&8191)*8)));
+            network.children.push_back(field("Header checksum",hex16(r.u16(p+10))));
+        }
         result.push_back(std::move(network));
-        unsigned protocol=0; bool nonFirst=false;
+        if (!v6 && (r.u8(p)&15)>5) {
+            const auto declared=std::size_t((r.u8(p)&15)*4-20);
+            const auto available=std::min(declared,r.end-(p+20));
+            result.back().children.push_back(field("Options (raw)",headerBytes(r,p+20,available)+
+                (available<declared ? " (truncated)" : "")));
+        }
+        unsigned protocol=0; bool nonFirst=false, fragmented=false;
         if (v6) {
             r.need(p,40); const auto end=p+40+r.u16(p+4); protocol=r.u8(p+6); p+=40; r.end=std::min(r.end,end);
             unsigned extensions=0;
             while (protocol==0 || protocol==43 || protocol==60 || protocol==44 || protocol==51) {
                 if (++extensions>8) return result;
                 r.need(p,2); const auto next=r.u8(p); const auto size=protocol==44 ? 8u : protocol==51 ? (r.u8(p+1)+2)*4 : (r.u8(p+1)+1)*8;
-                r.need(p,size); if (protocol==44) nonFirst=(r.u16(p+2)&0xfff8)!=0;
+                r.need(p,size);
+                ProtocolField extension{"IPv6 extension",number(protocol),{
+                    field("Next header",number(next)),field("Header length",number(size))}};
+                if (protocol==44) {
+                    const auto flags=r.u16(p+2);
+                    nonFirst=(flags&0xfff8)!=0; fragmented=nonFirst || (flags&1);
+                    extension.children.push_back(field("Reserved",number(r.u8(p+1))));
+                    extension.children.push_back(field("Fragment offset",number(flags>>3)));
+                    extension.children.push_back(field("Reserved bits",number((flags>>1)&3)));
+                    extension.children.push_back(field("More fragments",number(flags&1)));
+                    extension.children.push_back(field("Identification",number(r.u32(p+4))));
+                } else if (protocol==51) {
+                    extension.children.push_back(field("Payload length",number(r.u8(p+1))));
+                    extension.children.push_back(field("Reserved",number(r.u16(p+2))));
+                    extension.children.push_back(field("SPI",number(r.u32(p+4))));
+                    if (size>=12) {
+                        extension.children.push_back(field("Sequence number",number(r.u32(p+8))));
+                        if (size>12) extension.children.push_back(field("Authentication data (raw)",headerBytes(r,p+12,size-12)));
+                    }
+                } else {
+                    extension.children.push_back(field("Hdr Ext Len",number(r.u8(p+1))));
+                    if (protocol==43) {
+                        extension.children.push_back(field("Routing type",number(r.u8(p+2))));
+                        extension.children.push_back(field("Segments left",number(r.u8(p+3))));
+                        extension.children.push_back(field("Routing data (raw)",headerBytes(r,p+4,size-4)));
+                    } else extension.children.push_back(field("Options (raw)",headerBytes(r,p+2,size-2)));
+                }
+                result.push_back(std::move(extension));
                 p+=size; protocol=next; if (nonFirst) break;
             }
         } else {
-            r.need(p,20); nonFirst=(r.u16(p+6)&0x1fff)!=0; protocol=r.u8(p+9); const auto end=p+r.u16(p+2); p+=(r.u8(p)&15)*4; r.end=std::min(r.end,end);
+            r.need(p,20); nonFirst=(r.u16(p+6)&0x1fff)!=0; fragmented=(r.u16(p+6)&0x3fff)!=0; protocol=r.u8(p+9); const auto end=p+r.u16(p+2); p+=(r.u8(p)&15)*4; r.end=std::min(r.end,end);
         }
-        if (nonFirst || !record.sourcePort || !record.destinationPort) return result;
+        if (nonFirst || fragmented) return result;
+        if (protocol==1 || protocol==58) {
+            r.need(p,4);
+            ProtocolField icmp{protocol==1 ? "ICMP" : "ICMPv6","",{
+                field("Type",number(r.u8(p))),field("Code",number(r.u8(p+1))),field("Checksum",hex16(r.u16(p+2)))}};
+            const auto available=std::min(std::size_t{4},r.end-(p+4));
+            if (available) icmp.children.push_back(field("Rest of header (raw)",headerBytes(r,p+4,available)));
+            const auto icmpType=r.u8(p);
+            if (available==4 && ((protocol==1 && (icmpType==0 || icmpType==8)) || (protocol==58 && (icmpType==128 || icmpType==129)))) {
+                icmp.children.push_back(field("Identifier",number(r.u16(p+4))));
+                icmp.children.push_back(field("Sequence number",number(r.u16(p+6))));
+            }
+            result.push_back(std::move(icmp)); return result;
+        }
+        if (!record.sourcePort || !record.destinationPort) return result;
         ProtocolField layer{protocol==6 ? "TCP" : "UDP","",{field("Source port",number(*record.sourcePort)),field("Destination port",number(*record.destinationPort))}};
+        if (protocol==6) {
+            r.need(p,20);
+            layer.children.push_back(field("Sequence number",number(r.u32(p+4))));
+            layer.children.push_back(field("Acknowledgment number",number(r.u32(p+8))));
+            layer.children.push_back(field("Data offset",number(r.u8(p+12)>>4)));
+            layer.children.push_back(field("Header length",number((r.u8(p+12)>>4)*4)));
+            layer.children.push_back(field("Reserved",number((r.u8(p+12)>>1)&7)));
+            layer.children.push_back(field("NS",number(r.u8(p+12)&1)));
+            layer.children.push_back(field("Window size",number(r.u16(p+14))));
+            layer.children.push_back(field("Checksum",hex16(r.u16(p+16))));
+            layer.children.push_back(field("Urgent pointer",number(r.u16(p+18))));
+            const auto headerLength=(r.u8(p+12)>>4)*4;
+            if (headerLength>20) layer.children.push_back(field("Options (raw)",headerBytes(r,p+20,headerLength-20)));
+        } else {
+            r.need(p,8);
+            layer.children.push_back(field("Length",number(r.u16(p+4))));
+            layer.children.push_back(field("Checksum",hex16(r.u16(p+6))));
+        }
         if (record.tcpFlags) {
             ProtocolField flags{"Flags",number(*record.tcpFlags),{}};
             const char* names[]={"FIN","SYN","RST","PSH","ACK","URG","ECE","CWR"};
