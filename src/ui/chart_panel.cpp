@@ -205,7 +205,9 @@ class InteractiveChartView final : public QChartView
         else {
             const bool integers=chart()->property("inspectInteger").toBool();
             const auto sampleX=samples_[selected_].x();
-            const auto xText=integers && sampleX==65536 ? QStringLiteral(">65535 B（合并桶）") : number(sampleX,integers);
+            const auto xUnit=chart()->property("inspectXUnit").toString();
+            const auto xText=integers && sampleX==65536 ? QStringLiteral(">65535 B（合并统计）") :
+                number(sampleX,integers)+(xUnit.isEmpty()?QString():" "+xUnit);
             text=QStringLiteral("%1：%2 %3\n%4：%5")
                 .arg(chart()->property("inspectValueLabel").toString(),number(value,integers),
                      chart()->property("inspectUnit").toString(),chart()->property("inspectXLabel").toString(),xText);
@@ -419,7 +421,13 @@ void ChartPanel::refresh(const ProcessingSnapshot &s, const QString &source)
         if (!s.statistics.totalPackets)
             chart->setTitle(chart->title().replace(QStringLiteral("各分类均为 0"), QStringLiteral("暂无数据")));
         if(i==7) chart->setProperty("inspectDns",true);
-        if(i==2) chart->setProperty("inspectInteger",true);
+        if(i==2) {
+            chart->setProperty("inspectInteger",true);
+            chart->setProperty("inspectValueLabel",QStringLiteral("长度频次"));
+            chart->setProperty("inspectUnit",QStringLiteral("包"));
+            chart->setProperty("inspectXLabel",QStringLiteral("原始长度"));
+            chart->setProperty("inspectXUnit","B");
+        }
         if(i==0 || i==1 || i==7) replaceInteractiveChart(views_[i],chart,s.history);
         else replaceInteractiveChart(views_[i],chart);
     };
@@ -448,7 +456,7 @@ void ChartPanel::refresh(const ProcessingSnapshot &s, const QString &source)
     const QString time = QStringLiteral("距窗口起点秒（捕获时间）");
     set(0, lineChart(QStringLiteral("包速率"), packets, time, "pkt/s", QColor("#0b9c94")));
     set(1, lineChart(QStringLiteral("字节速率"), bytes, time, "KiB/s", QColor("#4285ed")));
-    set(2, lineChart(QStringLiteral("长度频次（65536 表示 >65535）"), lengths, QStringLiteral("原始长度 B"),
+    set(2, lineChart(QStringLiteral("长度频次（>65535 B 合并统计）"), lengths, QStringLiteral("原始长度 B"),
                      QStringLiteral("包数"), QColor("#0b9c94")));
     if (!lengths.isEmpty())
     {
