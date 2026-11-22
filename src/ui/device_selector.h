@@ -14,6 +14,8 @@ struct DeviceSystemInfo
     bool matched = false;
     bool enabled = false;
     bool running = false;
+    std::optional<bool> hardwareInterface;
+    std::optional<bool> mediaConnected;
 };
 // Windows metadata is keyed by the GUID also used by Npcap.
 QMap<QString, DeviceSystemInfo> systemDeviceInfo();

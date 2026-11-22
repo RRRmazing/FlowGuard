@@ -22,6 +22,7 @@ class MainWindow final : public QMainWindow
     void closeEvent(QCloseEvent *) override;
 
   private:
+    void beginDevice(const QString&, const QString&, const QString&, bool confirmReplacement);
     struct Impl;
     std::unique_ptr<Impl> d;
 };

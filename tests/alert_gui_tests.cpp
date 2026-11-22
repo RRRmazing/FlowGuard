@@ -46,9 +46,9 @@ int main(int argc,char** argv){
         check(wait([&]{return w.fileCompleted();}),"anomaly file completed");
         check(wait([&]{return table->rowCount()==5;}),"all five anomaly rules displayed");
         check(w.totalPackets()==2082,"demo PCAP packet count");
-        const std::map<QString,QString> expected{{QStringLiteral("疑似 SYN 泛洪"),"600 / 500"},
-            {QStringLiteral("疑似 TCP 端口扫描"),"30 / 20"},{QStringLiteral("回声请求频率异常"),"350 / 300"},
-            {QStringLiteral("UDP 高频流量"),"1100 / 1000"},{QStringLiteral("ARP 地址映射变化/冲突"),"1 / 1"}};
+        const std::map<QString,QString> expected{{QStringLiteral("疑似 SYN 泛洪"),QStringLiteral("600包 / 500包")},
+            {QStringLiteral("疑似 TCP 端口扫描"),QStringLiteral("30端口 / 20端口")},{QStringLiteral("回声请求频率异常"),QStringLiteral("350包 / 300包")},
+            {QStringLiteral("UDP 高频流量"),QStringLiteral("1100包 / 1000包")},{QStringLiteral("ARP 地址映射变化/冲突"),QStringLiteral("1次 / 1次")}};
         for(int row=0;row<table->rowCount();++row){const auto found=expected.find(table->item(row,1)->text());
             check(found!=expected.end()&&table->item(row,3)->text()==found->second,"demo rule peak matches independently specified expectation");}
         check(nav->item(3)->text().contains("5"),"navigation alert badge");
@@ -58,9 +58,28 @@ int main(int argc,char** argv){
         QTest::qWait(100);
         if(pages&&argc>3){w.grab().save(QString::fromLocal8Bit(argv[3])+"/alert-monitor.png");}
         settings->click();check(w.findChild<QWidget*>("alertRuleSettings")->isVisible(),"settings expand");
+        QTest::qWait(50);
+        for(int rule=0;rule<int(alertRuleCount);++rule)for(const auto& kind : {QString("alertWindow"),QString("alertThreshold")}) {
+            const auto name=kind+QString::number(rule);
+            auto* value=w.findChild<QSpinBox*>(name);
+            auto* up=w.findChild<QToolButton*>(name+"Increase");auto* down=w.findChild<QToolButton*>(name+"Decrease");
+            check(value&&up&&down,"every rule number has independent step buttons");
+            if(!value||!up||!down)continue;
+            const int original=value->value();value->setValue(10);
+            const auto inputRect=QRect(value->mapTo(&w,QPoint()),value->size());
+            check(value->buttonSymbols()==QAbstractSpinBox::NoButtons&&!inputRect.intersects(QRect(up->mapTo(&w,QPoint()),up->size())),
+                "up button does not overlap number input hit area");
+            for(const auto& point : {QPoint(3,up->height()/2),up->rect().center(),QPoint(up->width()-4,up->height()/2)})
+                QTest::mouseClick(up,Qt::LeftButton,Qt::NoModifier,point);
+            check(value->value()==13,"up button increments across its full visible width");
+            QTest::mouseClick(down,Qt::LeftButton);check(value->value()==12,"down button decrements");
+            value->setValue(value->maximum());check(!up->isEnabled()&&down->isEnabled(),"maximum disables increase");
+            value->setValue(value->minimum());check(!down->isEnabled()&&up->isEnabled(),"minimum disables decrease");
+            value->setValue(original);
+        }
         threshold->setValue(1000);apply->click();threshold->setValue(100);apply->click();
         check(wait([&]{for(int row=0;row<table->rowCount();++row)
-            if(table->item(row,1)->text().contains("SYN")&&table->item(row,3)->text()=="600 / 100")return true;return false;}),
+            if(table->item(row,1)->text().contains("SYN")&&table->item(row,3)->text()==QStringLiteral("600包 / 100包"))return true;return false;}),
             "rapid UI applications retain the latest threshold");
         threshold->setValue(1000);apply->click();
         check(wait([&]{return table->rowCount()==4;}),"raising threshold automatically removes SYN alert");

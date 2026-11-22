@@ -12,6 +12,7 @@
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QStandardPaths>
+#include <QScreen>
 #include <QThread>
 #include <QTimer>
 #include <QtWidgets>
@@ -40,22 +41,23 @@ static QString mib(std::uint64_t n)
 {
     return QString::number(double(n) / 1024 / 1024, 'f', 2) + " MiB";
 }
-static QString stateName(ProcessingState s)
+static QString stateName(ProcessingState s, ProcessingSource source, bool paced)
 {
     switch (s)
     {
     case ProcessingState::Idle:
         return QStringLiteral("就绪");
     case ProcessingState::Running:
-        return QStringLiteral("运行中");
+        return source==ProcessingSource::Live ? QStringLiteral("采集中") :
+            paced ? QStringLiteral("文件回放中") : QStringLiteral("文件分析中");
     case ProcessingState::Paused:
-        return QStringLiteral("已暂停");
+        return paced ? QStringLiteral("文件回放已暂停") : QStringLiteral("文件分析已暂停");
     case ProcessingState::Stopped:
-        return QStringLiteral("已停止");
+        return source==ProcessingSource::Live ? QStringLiteral("采集已停止") : QStringLiteral("文件处理已停止");
     case ProcessingState::Completed:
-        return QStringLiteral("分析完成");
+        return paced ? QStringLiteral("文件回放完成") : QStringLiteral("文件分析完成");
     case ProcessingState::Failed:
-        return QStringLiteral("失败");
+        return source==ProcessingSource::Live ? QStringLiteral("采集失败") : QStringLiteral("文件处理失败");
     }
     return {};
 }
@@ -82,6 +84,28 @@ static void fields(QTreeWidgetItem *parent, const std::vector<ProtocolField> &li
         fields(node, f.children);
     }
 }
+class CaptureChoiceDialog final : public QDialog
+{
+    QWidget *anchor_;
+  public:
+    CaptureChoiceDialog(QWidget *parent, QWidget *anchor) : QDialog(parent), anchor_(anchor) {}
+  protected:
+    void showEvent(QShowEvent *event) override
+    {
+        QDialog::showEvent(event);
+        const auto below=anchor_->mapToGlobal(QPoint(0,anchor_->height()+8));
+        auto *screen=QGuiApplication::screenAt(below);
+        if(!screen) screen=anchor_->screen();
+        const auto area=screen->availableGeometry().adjusted(4,4,-4,-4);
+        const auto size=frameGeometry().size();
+        const int x=std::clamp(below.x(),area.left(),std::max(area.left(),area.right()-size.width()+1));
+        int y=below.y();
+        if(y+size.height()>area.bottom()+1)
+            y=anchor_->mapToGlobal(QPoint(0,0)).y()-size.height()-8;
+        y=std::clamp(y,area.top(),std::max(area.top(),area.bottom()-size.height()+1));
+        move(x,y);
+    }
+};
 struct MainWindow::Impl
 {
     MainWindow *w;
@@ -99,10 +123,9 @@ struct MainWindow::Impl
     ResourceSample resource;
     std::deque<std::pair<double, ResourceSample>> resourceHistory;
     bool busy = false, closing = false, allowClose = false;
-    bool saveArmed = false, fileMode = false, finishingSave = false, closeAfterSave = false;
+    bool saveArmed = false, fileMode = false, filePaced = false, finishingSave = false, closeAfterSave = false;
     QString stagingPath, recordingNotice;
     QLabel *saveState = nullptr;
-    QAction *livePreparation = nullptr;
     QString recordPath, recordError, controlError, lastState, lastSavingError, lastSourceError;
     QTimer *poll, *second;
     DeviceSelector *devices = nullptr;
@@ -112,11 +135,11 @@ struct MainWindow::Impl
     QSpinBox *snaplen = nullptr;
     QWidget *snapshotControl = nullptr;
     QToolButton *snapshotUp = nullptr, *snapshotDown = nullptr;
-    QPushButton *start = nullptr, *stop = nullptr, *open = nullptr, *pause = nullptr, *save = nullptr,
+    QPushButton *start = nullptr, *stop = nullptr, *pause = nullptr, *save = nullptr,
                 *refresh = nullptr;
     QLabel *state = nullptr, *sessionTime = nullptr, *error = nullptr, *count = nullptr, *resourcesText = nullptr,
            *recordLabel = nullptr;
-    QAction *pauseAction = nullptr;
+    QAction *pauseAction = nullptr, *openPcapAction = nullptr;
     std::array<QLabel *, 3> timeBar{};
     std::array<QLabel *, 4> resourceMetrics{};
     QString sourceDescription;
@@ -135,7 +158,7 @@ struct MainWindow::Impl
     QPushButton *firstFilePage = nullptr, *previousFilePage = nullptr, *nextFilePage = nullptr, *lastFilePage = nullptr;
     QSpinBox *filePageNumber = nullptr;
     QLabel *filePageStatus = nullptr;
-    QPushButton *filterApply = nullptr, *filterReset = nullptr, *storageButton = nullptr;
+    QPushButton *filterApply = nullptr, *filterReset = nullptr;
     QAction *storageAction = nullptr;
     QString logRoot;
     bool storageRestartPending = false;
@@ -249,15 +272,13 @@ struct MainWindow::Impl
             widget->setEnabled(!blocked);
         follow->setEnabled(!fileComplete && !blocked);
         if(storageAction) storageAction->setEnabled(idle);
-        if(storageButton) storageButton->setEnabled(idle);
         for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snapshotControl})
             widget->setEnabled(idle);
         snapshotUp->setEnabled(idle && snaplen->value() < snaplen->maximum());
         snapshotDown->setEnabled(idle && snaplen->value() > snaplen->minimum());
         start->setEnabled(idle && devices->count() > 0);
-        open->setEnabled(idle);
+        openPcapAction->setEnabled(idle);
         stop->setEnabled(active() && !blocked);
-        if(livePreparation) livePreparation->setEnabled(idle);
         if (pauseAction)
             pauseAction->setVisible(snapshot.source == ProcessingSource::File && active());
         pause->setEnabled(!busy && !closing);
@@ -267,14 +288,15 @@ struct MainWindow::Impl
         save->setText(finishingSave ? QStringLiteral("正在结束保存…") :
             saveArmed ? QStringLiteral("取消保存等待") :
             (!stagingPath.isEmpty() || snapshot.savingActive || snapshot.savingRequested) ? QStringLiteral("结束保存") : QStringLiteral("开始保存报文"));
-        save->setToolTip(fileMode ? QStringLiteral("PCAP 文件分析不提供保存。选择网卡或“文件 → 准备实时采集”后，可为下一次采集预先开启保存。") :
+        save->setToolTip(fileMode ? QStringLiteral("PCAP 文件分析不提供保存。点击“开始采集”后，可选择从第一包开始保存。") :
             stagingPath.isEmpty() ? QStringLiteral("可提前开启等待实时采集；结束时确认文件名和位置。") : stagingPath);
-        if(saveState) saveState->setText(finishingSave ? QStringLiteral("正在收尾") : saveArmed ? QStringLiteral("等待采集") :
-            !stagingPath.isEmpty() ? (snapshot.savingActive ? QStringLiteral("记录中") : QStringLiteral("等待首包")) : recordingNotice);
+        if(saveState) saveState->setText(finishingSave ? QStringLiteral("正在结束报文保存") : saveArmed ? QStringLiteral("等待采集") :
+            snapshot.savingActive ? QStringLiteral("报文保存中") :
+            (!stagingPath.isEmpty() || snapshot.savingRequested) ? QStringLiteral("等待首包保存") : recordingNotice);
         state->setToolTip(sourceDescription);
         state->setText(closing ? QStringLiteral("正在退出…")
-                       : busy  ? QStringLiteral("处理中…")
-                               : stateName(snapshot.state));
+                       : busy  ? QStringLiteral("操作处理中…")
+                               : stateName(snapshot.state,snapshot.source,filePaced));
         QStringList problems;
         if (!controlError.isEmpty())
             problems << controlError;
@@ -354,6 +376,29 @@ struct MainWindow::Impl
         const auto path=stagingPath;
         command("begin_recording",[this,path]{return backend.enableSaving(std::filesystem::path(path.toStdWString()));},{{"temporary",path}},
             [this](const OperationResult& result){if(!result.ok())stagingPath.clear();});
+    }
+    void chooseCapture()
+    {
+        if(active() || busy || closing || finishingSave || !stagingPath.isEmpty())return;
+        CaptureChoiceDialog dialog(w,start);dialog.setObjectName("captureSavingChoice");
+        dialog.setWindowTitle(QStringLiteral("开始采集"));
+        auto* layout=new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(QStringLiteral("是否同时开始保存报文？")));
+        if(snapshot.statistics.totalPackets) {
+            auto* note=new QLabel(QStringLiteral("开始采集后将替换当前列表与统计。"));layout->addWidget(note);
+        }
+        auto* buttons=new QHBoxLayout;
+        auto* withSaving=new QPushButton(QStringLiteral("立即开始保存报文"));withSaving->setObjectName("captureAndSave");
+        auto* withoutSaving=new QPushButton(QStringLiteral("暂不开始保存报文"));withoutSaving->setObjectName("captureWithoutSaving");
+        // No implicit Enter/default selection: an explicit choice starts capture.
+        withSaving->setAutoDefault(false);withoutSaving->setAutoDefault(false);
+        buttons->addWidget(withSaving);buttons->addWidget(withoutSaving);layout->addLayout(buttons);
+        QObject::connect(withSaving,&QPushButton::clicked,&dialog,[&dialog]{dialog.done(1);});
+        QObject::connect(withoutSaving,&QPushButton::clicked,&dialog,[&dialog]{dialog.done(2);});
+        const auto choice=dialog.exec();
+        if(choice!=1 && choice!=2)return;
+        saveArmed=choice==1;recordingNotice.clear();
+        w->beginDevice(devices->currentData().toString(),bpf->text(),{},false);
     }
     void refreshDevices()
     {
@@ -804,31 +849,16 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
         "QListWidget::item:selected{background:#d2eeeb;color:#087f83;}");
     auto *file = menuBar()->addMenu(QStringLiteral("文件"));
     auto *fileAction = file->addAction(QStringLiteral("打开 PCAP…"));
+    d->openPcapAction=fileAction;
+    fileAction->setObjectName("openPcapAction");
     fileAction->setShortcut(QKeySequence::Open);
     connect(fileAction, &QAction::triggered, this, [this] { d->chooseFile(); });
-    d->livePreparation=file->addAction(QStringLiteral("准备实时采集"));
-    connect(d->livePreparation,&QAction::triggered,this,[this] {
-        d->fileMode=false;d->recordingNotice=QStringLiteral("实时采集准备就绪");d->updateControls();
-    });
     file->addSeparator();
     connect(file->addAction(QStringLiteral("退出")), &QAction::triggered, this, &QWidget::close);
     auto *savingMenu=menuBar()->addMenu(QStringLiteral("保存设置"));
     d->storageAction=savingMenu->addAction(QStringLiteral("数据保存位置…"));
     d->storageAction->setObjectName("storageLocationsAction");
     connect(d->storageAction,&QAction::triggered,this,[this]{d->chooseStorage();});
-    auto *location=savingMenu->addAction(QStringLiteral("默认保存位置…"));
-    location->setObjectName("defaultPcapDirectory");
-    connect(location,&QAction::triggered,this,[this] {
-        const auto chosen=QFileDialog::getExistingDirectory(this,QStringLiteral("选择默认 PCAP 保存目录（对下一段记录生效）"),RecordingFiles::defaultDirectory());
-        if(!chosen.isEmpty()) {
-            const auto problem=RecordingFiles::setDefaultDirectory(chosen);
-            if(!problem.isEmpty())QMessageBox::warning(this,QStringLiteral("保存设置失败"),problem);
-        }
-    });
-    auto *showLocation=savingMenu->addAction(QStringLiteral("查看默认保存位置"));
-    connect(showLocation,&QAction::triggered,this,[this] {
-        QMessageBox::information(this,QStringLiteral("默认 PCAP 保存位置"),QDir::toNativeSeparators(RecordingFiles::defaultDirectory()));
-    });
     auto *help = menuBar()->addMenu(QStringLiteral("帮助"));
     connect(help->addAction(QStringLiteral("使用指南（含20分钟验收）")),&QAction::triggered,this,[this] {
         const auto guide=QCoreApplication::applicationDirPath()+QStringLiteral("/FlowGuard使用指南.html");
@@ -855,13 +885,16 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->start = button(QStringLiteral("开始采集"));
     d->start->setObjectName("primary");
     d->stop = button(QStringLiteral("停止"));
-    d->open = button(QStringLiteral("打开 PCAP"));
     d->pause = button(QStringLiteral("暂停回放"));
     d->pauseAction = toolbar->actions().back();
     d->save = button(QStringLiteral("开始保存报文"));
     d->save->setObjectName("recordPackets");
+    auto *statusGap=new QWidget;
+    statusGap->setFixedWidth(d->stop->sizeHint().width());
+    toolbar->addWidget(statusGap);
     d->saveState=new QLabel;d->saveState->setObjectName("recordingStatus");toolbar->addWidget(d->saveState);
     d->state = new QLabel;
+    d->state->setObjectName("captureStatus");
     toolbar->addWidget(d->state);
     auto *central = new QWidget;
     setCentralWidget(central);
@@ -869,6 +902,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     auto *capture = new QHBoxLayout;
     capture->addWidget(new QLabel(QStringLiteral("捕获过滤 BPF")));
     d->bpf = new QLineEdit;
+    d->bpf->setObjectName("captureBpf");
     d->bpf->setPlaceholderText(QStringLiteral("udp or tcp（留空不过滤）"));
     capture->addWidget(d->bpf, 1);
     d->promiscuous = new QCheckBox(QStringLiteral("混杂模式"));
@@ -913,9 +947,6 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     outer->addLayout(capture);
     connect(d->devices, &QComboBox::currentIndexChanged, this,
             [this] { d->devices->setToolTip(d->devices->currentData(Qt::ToolTipRole).toString()); });
-    connect(d->devices,&QComboBox::activated,this,[this] {
-        if(!d->active() && !d->busy) {d->fileMode=false;d->recordingNotice.clear();d->updateControls();}
-    });
     d->error = new QLabel;
     d->error->setWordWrap(true);
     d->error->setStyleSheet("color:#9b361f;background:#fff0db;padding:8px;");
@@ -1092,10 +1123,6 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     folder->setToolTip(
         QStringLiteral("打开当前电脑上本次运行的日志目录。每位用户使用自己的存储位置，不依赖开发者用户名。"));
     resLayout->addWidget(folder);
-    d->storageButton=new QPushButton(QStringLiteral("设置数据保存位置…"));
-    d->storageButton->setObjectName("storageLocationsButton");
-    resLayout->addWidget(d->storageButton);
-    connect(d->storageButton,&QPushButton::clicked,this,[this]{d->chooseStorage();});
     auto *resScroll = new QScrollArea;
     resScroll->setWidgetResizable(true);
     resScroll->setWidget(res);
@@ -1156,9 +1183,8 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     nav->setCurrentRow(0);
     connect(d->refresh, &QPushButton::clicked, this, [this] { d->refreshDevices(); });
     connect(d->start, &QPushButton::clicked, this,
-            [this] { startDevice(d->devices->currentData().toString(), d->bpf->text()); });
+            [this] { d->chooseCapture(); });
     connect(d->stop, &QPushButton::clicked, this, &MainWindow::requestStop);
-    connect(d->open, &QPushButton::clicked, this, [this] { d->chooseFile(); });
     connect(d->pause, &QPushButton::clicked, this, [this] {
         const bool paused = d->snapshot.state == ProcessingState::Paused;
         d->command("pause_resume", [this, paused] { return paused ? d->backend.resume() : d->backend.pause(); });
@@ -1226,16 +1252,20 @@ void MainWindow::openFile(const QString &path, bool paced, double speed)
         {{"path", path}, {"paced", paced}, {"speed", speed}},
         [this,path,paced,speed](const OperationResult& result) {
             if(!result.ok())return;
-            d->recordingNotice=d->saveArmed?QStringLiteral("已取消保存等待"):QString();d->saveArmed=false;d->fileMode=true;
+            d->recordingNotice=d->saveArmed?QStringLiteral("已取消保存等待"):QString();d->saveArmed=false;d->fileMode=true;d->filePaced=paced;
             d->currentFilePath=path;
             d->sourceDescription=QStringLiteral("文件：")+path+(paced?QStringLiteral(" · 按捕获时间回放 %1×").arg(speed):QStringLiteral(" · 快速导入"));
         });
 }
 void MainWindow::startDevice(const QString &id, const QString &bpf, const QString &initialSavePath)
 {
+    beginDevice(id,bpf,initialSavePath,true);
+}
+void MainWindow::beginDevice(const QString &id, const QString &bpf, const QString &initialSavePath,bool confirmReplacement)
+{
     if (d->active() || d->busy || d->finishingSave || !d->stagingPath.isEmpty())
         return;
-    if (d->snapshot.statistics.totalPackets && !qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE") &&
+    if (confirmReplacement && d->snapshot.statistics.totalPackets && !qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE") &&
         QMessageBox::question(this, QStringLiteral("新会话"), QStringLiteral("新会话将替换当前列表与统计，继续？")) !=
             QMessageBox::Yes)
         return;

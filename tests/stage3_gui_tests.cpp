@@ -241,13 +241,13 @@ int main(int argc, char **argv)
         w.show();
         QTest::qWait(500);
         auto *adapters = w.findChild<QComboBox *>("captureDevice");
+        auto *openPcap=w.findChild<QAction *>("openPcapAction");
         check(adapters && wait([&] { return adapters->count() > 0; }), "capture selector populated");
         check(wait([&] { return button(w, QStringLiteral("开始采集"))->isEnabled(); }), "initial controls ready");
-        auto *storageButton = w.findChild<QPushButton *>("storageLocationsButton");
         auto *storageAction = w.findChild<QAction *>("storageLocationsAction");
         auto *recordButton=w.findChild<QPushButton *>("recordPackets");
         check(recordButton && recordButton->isEnabled(), "recording can be armed before capture");
-        check(storageButton && storageAction && storageAction->isEnabled(), "storage selection available while idle");
+        check(storageAction && storageAction->isEnabled(), "storage selection available while idle");
         if (storageAction) {
             QTimer::singleShot(0, &w, [&] {
                 auto *dialog = w.findChild<QDialog *>("storageLocationsDialog");
@@ -326,7 +326,7 @@ int main(int argc, char **argv)
             return resumed && resumed->isEnabled() && button(w, QStringLiteral("停止"))->isEnabled();
         }), "resume acknowledged and stop control ready");
         w.requestStop();
-        check(wait([&] { return button(w, QStringLiteral("打开 PCAP"))->isEnabled(); }), "stop returns to idle");
+        check(wait([&] { return openPcap && openPcap->isEnabled(); }), "stop restores file-menu opening");
         w.openFile(QString::fromLocal8Bit(argv[1]));
         check(wait([&] { return w.fileCompleted() && w.totalPackets() == 18; }), "complete fixture exactly18");
         auto *duration = w.findChild<QLabel *>("sessionDuration");
@@ -378,7 +378,7 @@ int main(int argc, char **argv)
         w.startDevice("\\Device\\NPF_Loopback", QString("udp and dst port %1").arg(port));
         check(wait([&] { return button(w, QStringLiteral("停止"))->isEnabled(); }), "GUI live capture started");
         check(!button(w, QStringLiteral("开始采集"))->isEnabled(), "start disabled while capturing");
-        check(storageAction && !storageAction->isEnabled() && storageButton && !storageButton->isEnabled(),
+        check(storageAction && !storageAction->isEnabled(),
               "storage settings locked during capture to preserve run evidence");
         check(snaplen && !snaplen->isEnabled(), "snapshot length locked while capturing");
         QUdpSocket sender;
@@ -395,7 +395,7 @@ int main(int argc, char **argv)
         if (!previewDirectory.isEmpty())
             w.saveScreenshot(previewDirectory + "/capturing.png");
         w.requestStop();
-        check(wait([&] { return button(w, QStringLiteral("打开 PCAP"))->isEnabled(); }), "GUI live stopped");
+        check(wait([&] { return openPcap && openPcap->isEnabled(); }), "GUI live stopped");
         const QString stoppedDuration = duration ? duration->text() : QString();
         QTest::qWait(1100);
         check(duration && duration->text() == stoppedDuration, "capture duration freezes after stop");
@@ -415,7 +415,7 @@ int main(int argc, char **argv)
                   "real Ethernet headers displayed in Qt tree");
             QTest::qWait(1000);
             w.requestStop();
-            check(wait([&] { return button(w, QStringLiteral("打开 PCAP"))->isEnabled(); }),
+            check(wait([&] { return openPcap && openPcap->isEnabled(); }),
                   "real NIC stopped through Qt controls");
             if (!previewDirectory.isEmpty())
                 w.saveScreenshot(previewDirectory + "/wlan.png");

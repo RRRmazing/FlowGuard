@@ -45,6 +45,24 @@ int main(int argc, char **argv)
         describeDevice(virtualDevice, {"Host-only", QNetworkInterface::Ethernet, true, true, true});
     check(virtualChoice.priority > wifiChoice.priority && virtualChoice.title.contains(QStringLiteral("虚拟")),
           "virtual Ethernet not preferred over active physical interface");
+    CaptureDevice wan;wan.id="wan-miniport";wan.description="WAN Miniport (IPv6)";
+    DeviceSystemInfo wanInfo{"Local connection",QNetworkInterface::Ethernet,true,true,true};
+    wanInfo.hardwareInterface=false;wanInfo.mediaConnected=true;
+    const auto wanChoice=describeDevice(wan,wanInfo);
+    check(wanChoice.title.contains(QStringLiteral("虚拟/WAN接口"))&&wanChoice.title.contains(QStringLiteral("就绪"))&&
+        !wanChoice.title.contains(QStringLiteral("已连接"))&&wanChoice.priority>wifiChoice.priority,
+        "WAN miniport operational up is not a connected physical Ethernet adapter");
+    check(describeDevice(wan,{"WAN",QNetworkInterface::Ethernet,true,true,true}).title.contains(QStringLiteral("虚拟/WAN接口")),
+        "WAN classification falls back to description when hardware metadata unavailable");
+    CaptureDevice software;software.id="software";software.description="Ethernet-compatible interface";
+    check(describeDevice(software,wanInfo).title.contains(QStringLiteral("虚拟")),"OS software-interface flag overrides Ethernet type");
+    DeviceSystemInfo disconnected{"Ethernet",QNetworkInterface::Ethernet,true,true,true};
+    disconnected.hardwareInterface=true;disconnected.mediaConnected=false;
+    const auto unplugged=describeDevice(ethernet,disconnected);
+    check(unplugged.title.contains(QStringLiteral("未连接"))&&unplugged.priority>wifiChoice.priority,
+        "disconnected physical media is never preferred solely due to operational up");
+    wanInfo.enabled=false;
+    check(describeDevice(wan,wanInfo).title.contains(QStringLiteral("未启用")),"disabled virtual interface is not labeled ready");
     DeviceSelector selector;
     selector.setChoices({wifiChoice, wiredChoice, virtualChoice});
     check(selector.count() == 3 && selector.currentData().toString() == "wifi-id",

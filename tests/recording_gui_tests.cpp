@@ -53,22 +53,38 @@ int main(int argc,char** argv) {
         check(save&&status,"recording UI available");
         auto button=[&](QString name){for(auto* b:w.findChildren<QPushButton*>())if(b->text()==name)return b;return static_cast<QPushButton*>(nullptr);};
         auto files=[&]{return QDir(folder).entryList({".recording-*.pcap"},QDir::Files|QDir::Hidden);};
+        auto chooseCapture=[&](const QString& choice) {
+            bool handled=false;
+            QTimer::singleShot(0,&w,[&] {
+                auto* dialog=w.findChild<QDialog*>("captureSavingChoice");
+                check(dialog!=nullptr,"every capture-button click opens saving choice");
+                check(dialog->findChildren<QPushButton*>().size()==2&&dialog->findChildren<QCheckBox*>().empty(),"capture choice has only two direct buttons");
+                handled=true;
+                if(choice.isEmpty())dialog->reject();
+                else dialog->findChild<QPushButton*>(choice)->click();
+            });
+            button(QStringLiteral("开始采集"))->click();check(handled,"capture choice handled");
+        };
         wait([&]{return save->isEnabled();},"initial saving enabled before capture");
         save->click();check(status->text()==QStringLiteral("等待采集")&&files().empty(),"arming before capture creates no file");
+        chooseCapture({});check(status->text()==QStringLiteral("等待采集")&&files().empty()&&!button(QStringLiteral("停止"))->isEnabled(),"closing capture choice preserves pre-armed waiting and does not capture");
         w.openFile(owned.path()+"/not-found.pcap");
         wait([&]{return save->isEnabled();},"failed file open settled");
         check(status->text()==QStringLiteral("等待采集"),"failed file open preserves waiting state");
         w.openFile(QString::fromLocal8Bit(argv[1]));wait([&]{return w.fileCompleted();},"PCAP open completes");
         wait([&]{return button(QStringLiteral("开始采集"))->isEnabled();},"file paging finishes before live preparation");
         check(!save->isEnabled()&&files().empty(),"PCAP mode disables saving and cancels empty waiting");
-        auto prepareLive=[&]{for(auto* a:w.findChildren<QAction*>())if(a->text()==QStringLiteral("准备实时采集")){a->trigger();return;}throw std::runtime_error("live preparation action missing");};
-        prepareLive();check(save->isEnabled()&&save->text()==QStringLiteral("开始保存报文"),"returning to live mode does not restore old waiting switch");
+        chooseCapture({});check(w.fileCompleted()&&w.totalPackets()==18&&!save->isEnabled()&&files().empty(),"closing choice preserves PCAP result and file mode");
+        for(auto* action:w.findChildren<QAction*>())check(action->text()!=QStringLiteral("准备实时采集"),"unnecessary preparation menu removed");
 
         QUdpSocket receiver,sender;check(receiver.bind(QHostAddress::LocalHost,0),"own localhost UDP socket");
         QObject::connect(&receiver,&QUdpSocket::readyRead,&receiver,[&]{while(receiver.hasPendingDatagrams())receiver.readDatagram(nullptr,0);});
         auto send=[&](int n){for(int i=0;i<n;++i){check(sender.writeDatagram("owned-recording-test",QHostAddress::LocalHost,receiver.localPort())>0,"send owned localhost packet");QTest::qWait(20);}};
         auto startCapture=[&]{w.startDevice(QString::fromStdString(loop->id),QString("udp and dst port %1").arg(receiver.localPort()));
             wait([&]{return button(QStringLiteral("停止"))->isEnabled();},"live capture started");};
+        auto* adapters=w.findChild<QComboBox*>("captureDevice");const auto adapterIndex=adapters->findData(QString::fromStdString(loop->id));
+        check(adapterIndex>=0,"loopback selectable in capture UI");adapters->setCurrentIndex(adapterIndex);
+        w.findChild<QLineEdit*>("captureBpf")->setText(QString("udp and dst port %1").arg(receiver.localPort()));
         QString answer;bool answerReady=false,dialogHandled=false;QString suggested;
         QTimer watcher;watcher.setInterval(10);
         QObject::connect(&watcher,&QTimer::timeout,&app,[&]{if(!answerReady)return;
@@ -79,7 +95,8 @@ int main(int argc,char** argv) {
             }});watcher.start();
         auto readCount=[&](const QString& path){PcapReader reader;check(reader.open(std::filesystem::path(path.toStdWString())).ok(),"open finalized PCAP");
             RawPacket raw;OperationResult error;unsigned count=0;while(reader.readNext(raw,error)==ReadStatus::Packet)++count;check(error.ok(),"finalized PCAP readable to EOF");return count;};
-        save->click();startCapture();send(10);wait([&]{return w.totalPackets()>=10;},"initial captured packets processed");
+        chooseCapture("captureAndSave");wait([&]{return button(QStringLiteral("停止"))->isEnabled();},"file-to-live saving choice starts capture directly");
+        send(10);wait([&]{return w.totalPackets()>=10;},"initial captured packets processed");
         const auto initial=w.totalPackets();answer=owned.path()+"/from-first-packet.pcap";answerReady=true;dialogHandled=false;save->click();
         wait([&]{return QFileInfo::exists(answer)&&save->isEnabled();},"end recording confirms final file");
         check(dialogHandled&&suggested.contains(QStringLiteral("_至_"))&&!suggested.contains(':'),"end dialog suggests Windows-safe actual time range");
@@ -118,7 +135,12 @@ int main(int argc,char** argv) {
         w.findChild<QPushButton*>("nextFilePage")->click();wait([&]{return page->isEnabled()&&page->value()==2;},"saved PCAP second page loads");
         check(packetTable->model()->rowCount()==600&&packetTable->model()->index(0,0).data().toULongLong()==2001&&packetTable->model()->index(599,0).data().toULongLong()==2600,"saved PCAP retains complete second page and original numbering");
         w.findChild<QPushButton*>("firstFilePage")->click();wait([&]{return page->isEnabled()&&page->value()==1;},"saved PCAP can return to first page");
-        prepareLive();
+        chooseCapture("captureWithoutSaving");wait([&]{return button(QStringLiteral("停止"))->isEnabled();},"file-to-live choice can start without saving");
+        check(files().empty()&&save->text()==QStringLiteral("开始保存报文"),"without-saving choice creates no recording");
+        w.requestStop();wait([&]{return button(QStringLiteral("开始采集"))->isEnabled();},"nonrecording capture stopped");
+        save->click();chooseCapture("captureWithoutSaving");wait([&]{return button(QStringLiteral("停止"))->isEnabled();},"pre-armed start still shows direct saving choice");
+        check(status->text()!=QStringLiteral("等待采集")&&files().empty()&&save->text()==QStringLiteral("开始保存报文"),"latest no-save choice overrides earlier waiting switch");
+        w.requestStop();wait([&]{return button(QStringLiteral("开始采集"))->isEnabled();},"override test capture stopped");
         save->click();w.startDevice("\\Device\\NPF_{00000000-0000-0000-0000-000000000000}");
         wait([&]{return save->isEnabled();},"failed capture startup settled");
         check(status->text()==QStringLiteral("等待采集")&&files().empty(),"failed start preserves waiting without creating a file");

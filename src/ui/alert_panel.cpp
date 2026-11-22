@@ -15,6 +15,35 @@ static QString stamp(std::chrono::system_clock::time_point t) {
         .toString("yyyy-MM-dd HH:mm:ss.zzz");
 }
 static std::string identity(const AlertRecord& a) { return std::to_string(int(a.rule))+":"+a.key; }
+static QString countUnit(AlertRule rule) {
+    return rule==AlertRule::PortScan ? QStringLiteral("端口") : rule==AlertRule::Arp ? QStringLiteral("次") : QStringLiteral("包");
+}
+static QWidget* numberControl(QSpinBox* value,const QString& label) {
+    auto* control=new QWidget;
+    auto* row=new QHBoxLayout(control);row->setContentsMargins(0,0,0,0);row->setSpacing(0);
+    value->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    row->addWidget(value,1);
+    auto* up=new QToolButton;auto* down=new QToolButton;
+    up->setObjectName(value->objectName()+"Increase");down->setObjectName(value->objectName()+"Decrease");
+    up->setText(QStringLiteral("▲"));down->setText(QStringLiteral("▼"));
+    up->setToolTip(QStringLiteral("增加")+label);down->setToolTip(QStringLiteral("减少")+label);
+    up->setAccessibleName(up->toolTip());down->setAccessibleName(down->toolTip());
+    for(auto* button : {up,down}) {
+        button->setFixedWidth(28);button->setMinimumHeight(32);
+        button->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Expanding);
+        button->setCursor(Qt::ArrowCursor);button->setAutoRepeat(true);
+        button->setStyleSheet("QToolButton{background:white;border:1px solid #cad6e3;color:#172639;} "
+            "QToolButton:hover{background:#e0f2f1;} QToolButton:disabled{background:#edf0f4;color:#9da7b3;}");
+        row->addWidget(button);
+    }
+    QObject::connect(up,&QToolButton::clicked,value,&QSpinBox::stepUp);
+    QObject::connect(down,&QToolButton::clicked,value,&QSpinBox::stepDown);
+    const auto update=[value,up,down] {
+        up->setEnabled(value->value()<value->maximum());down->setEnabled(value->value()>value->minimum());
+    };
+    QObject::connect(value,&QSpinBox::valueChanged,control,[update](int){update();});update();
+    return control;
+}
 AlertPanel::AlertPanel(QWidget* parent) : QWidget(parent) {
     setObjectName("alertPanel");
     auto* layout = new QVBoxLayout(this);
@@ -43,7 +72,8 @@ AlertPanel::AlertPanel(QWidget* parent) : QWidget(parent) {
         threshold_[i] = new QSpinBox; threshold_[i]->setRange(1,i==2?65536:100000); threshold_[i]->setValue(int(defaults[i].threshold));
         threshold_[i]->setObjectName(QString("alertThreshold%1").arg(i));
         grid->addWidget(enabled_[i],int(i)+1,0); grid->addWidget(new QLabel(groups[int(i)]),int(i)+1,1);
-        grid->addWidget(window_[i],int(i)+1,2); grid->addWidget(threshold_[i],int(i)+1,3);
+        grid->addWidget(numberControl(window_[i],alertRuleName(AlertRule(i))+QStringLiteral("窗口秒数")),int(i)+1,2);
+        grid->addWidget(numberControl(threshold_[i],alertRuleName(AlertRule(i))+QStringLiteral("触发数量")),int(i)+1,3);
     }
     auto* apply = new QPushButton(QStringLiteral("应用规则")); apply->setObjectName("applyAlertRules");
     grid->addWidget(apply,6,3);
@@ -57,7 +87,7 @@ AlertPanel::AlertPanel(QWidget* parent) : QWidget(parent) {
         if (applyRules) applyRules(rules);
     });
     counts_ = new QLabel; counts_->setObjectName("alertCounts"); layout->addWidget(counts_);
-    auto* listHeader = new QHBoxLayout; listHeader->addWidget(new QLabel(QStringLiteral("告警记录（同一规则与对象合并更新）"))); listHeader->addStretch();
+    auto* listHeader = new QHBoxLayout; listHeader->addStretch();
     export_ = new QPushButton(QStringLiteral("导出告警 CSV")); listHeader->addWidget(export_); layout->addLayout(listHeader);
     table_ = new QTableWidget(0,6); table_->setObjectName("alertTable");
     table_->setHorizontalHeaderLabels({QStringLiteral("最近触发"),QStringLiteral("预警类型"),QStringLiteral("检测对象"),
@@ -101,11 +131,16 @@ const AlertRecord* AlertPanel::selected() const {
 void AlertPanel::showDetail() {
     const auto* a=selected(); confirm_->setEnabled(a && !confirmed_.count(identity(*a))); related_->setEnabled(a!=nullptr);
     if(!a) {detail_->setText(QStringLiteral("选择一条告警查看触发依据。暂无告警只表示当前规则未发现异常。"));return;}
-    const QString unit = a->rule==AlertRule::PortScan ? QStringLiteral("不同端口") : a->rule==AlertRule::Arp ? QStringLiteral("映射变化") : QStringLiteral("包");
-    detail_->setText(QStringLiteral("%1\n检测对象：%2\n窗口 %3 秒，触发数量 ≥ %4 %5；窗口峰值 %6，末次评估数量 %7。\n首次触发：%8\n最近触发：%9\n关联报文序号：%10%11%12")
-        .arg(alertRuleName(a->rule),text(a->key)).arg(a->config.windowSeconds).arg(a->config.threshold).arg(unit).arg(a->peak).arg(a->current)
-        .arg(stamp(a->first),stamp(a->last)).arg(a->packetSequence)
-        .arg(a->evidence.empty()?QString():QStringLiteral("\n最近 MAC 变化：")+text(a->evidence))
+    const QString unit=countUnit(a->rule);
+    QString evidence;
+    if(!a->evidence.empty()) {
+        const auto macs=text(a->evidence).split(" -> ");
+        evidence=macs.size()==2 ? QStringLiteral("\n原 MAC 地址：%1\n新 MAC 地址：%2").arg(macs[0],macs[1]) : QStringLiteral("\nMAC 地址变化：")+text(a->evidence);
+    }
+    detail_->setText(QStringLiteral("%1\n检测对象：%2\n窗口 %3 秒，触发数量 ≥ %4；窗口峰值 %5，当前窗口数量 %6。\n首次触发：%7\n最近触发：%8\n关联报文序号：%9%10%11")
+        .arg(alertRuleName(a->rule),text(a->key)).arg(a->config.windowSeconds)
+        .arg(QString::number(a->config.threshold)+unit,QString::number(a->peak)+unit,QString::number(a->current)+unit)
+        .arg(stamp(a->first),stamp(a->last)).arg(a->packetSequence).arg(evidence)
         .arg(snapshot_.rebuilding[std::size_t(a->rule)]?QStringLiteral("\n正在重新检测：当前显示旧结果，完成后替换。 "):QString()));
 }
 void AlertPanel::refresh(const AlertSnapshot& s,const QString& source,bool running,bool playbackPaused) {
@@ -131,7 +166,8 @@ void AlertPanel::refresh(const AlertSnapshot& s,const QString& source,bool runni
         QString detection = a.active ? (s.finished?QStringLiteral("输入结束时仍异常"):QStringLiteral("持续异常")):QStringLiteral("已恢复");
         if(s.rebuilding[std::size_t(a.rule)]) detection=QStringLiteral("待更新（旧结果）");
         else if(!s.error.empty()) detection+=QStringLiteral("（结果待核实）");
-        const QStringList cells{stamp(a.last),alertRuleName(a.rule),text(a.key),QStringLiteral("%1 / %2").arg(a.peak).arg(a.config.threshold),detection,
+        const auto unit=countUnit(a.rule);
+        const QStringList cells{stamp(a.last),alertRuleName(a.rule),text(a.key),QStringLiteral("%1%2 / %3%2").arg(a.peak).arg(unit).arg(a.config.threshold),detection,
             confirmed_.count(identity(a))?QStringLiteral("已确认"):QStringLiteral("待确认")};
         for(int c=0;c<cells.size();++c){auto* item=table_->item(int(i),c);if(!item){item=new QTableWidgetItem;table_->setItem(int(i),c,item);}item->setText(cells[c]);}
         if(identity(a)==selectedKey_)selectedRow=int(i);

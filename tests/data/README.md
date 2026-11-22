@@ -35,4 +35,15 @@ PCAP 字节序、精度和残缺文件在 `tests/pcap_reader_tests.cpp` 内生�
 
 `alerts-demo.pcap`：2082 个离线构造报文，默认规则触发 SYN、扫描、ICMP、UDP、ARP 五类预警。
 `alerts-normal.pcap`：52 个低频 TCP、ICMP 和稳定 ARP 报文，默认规则无预警。
+两份样本使用同一局域网场景，固定起始时间为北京时间 2026-11-22 14:30:00：
+
+| 角色 | IPv4 地址 | MAC 地址 |
+| --- | --- | --- |
+| 发起端／ARP 原映射 | 192.168.10.23 | 02:4C:7A:91:BD:36 |
+| 目标端 | 192.168.10.80 | 02:8F:D2:67:AC:10 |
+| 后续声明同一 IP 的接口 | 192.168.10.23 | 06:9E:43:A8:62:F1 |
+
+MAC 均为本地管理的单播示例地址；第三行只出现在异常样本的末包。
+正常样本包括配对的 TCP 三次握手和 ICMP 请求／应答；异常样本包括密集 SYN、常见服务端口扫描、密集回声请求、UDP 流量及 ARP 映射变化。
+Ethernet 与 ARP 地址保持一致，IPv4、TCP、UDP、ICMP 校验和有效。这些仍是人工构造的教学样本，不是真实网络抓包。
 生成入口为 `python tests/generate_alert_samples.py`，不会发送流量；验收步骤见 `docs/alert-monitoring.md`。
