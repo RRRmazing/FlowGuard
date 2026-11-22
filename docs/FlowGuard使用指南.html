@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlowGuard 使用与20分钟验收指南</title>
+<style>
+body{font:16px/1.85 "Microsoft YaHei",sans-serif;color:#172639;background:#f4f7fb;margin:0}main{max-width:1050px;margin:auto;background:#fff;padding:32px 42px}h1,h2{color:#087f83;line-height:1.5}h2{margin-top:32px}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #cbd5e1;padding:10px;vertical-align:top;text-align:left}th{background:#eaf0f7}code{background:#eef3f8;overflow-wrap:anywhere;padding:2px 5px}.note{background:#e7f5f3;border-left:4px solid #087f83;padding:12px 18px}a{color:#087f83}li{margin:7px 0}@media print{body{background:white}main{padding:0;max-width:none}tr{break-inside:avoid}h2{break-after:avoid}}
+</style></head><body><main>
+<h1>FlowGuard 流量哨兵使用指南</h1>
+<p>适用于本地验收版，2026年11月22日。本文对应当前软件菜单及功能；用浏览器打开即可阅读，也可以按 Ctrl+P 打印或导出 PDF。</p>
+<p><a href="#storage">保存位置</a> · <a href="#capture">实时采集</a> · <a href="#filter">筛选与详情</a> · <a href="#charts">图表</a> · <a href="#save">保存与回读</a> · <a href="#test">20分钟验收</a></p>
+<div class="note">融合版：保留完整协议字段、PCAP全文件分页、图表交互，并增加五类异常预警。报文采用分段保存：点击“开始保存报文” → 采集前等待或采集中立即开启 → 结束时确认位置及时间段文件名；取消最终保存会丢弃本段。日志采用程序旁 data/runs，可另选目录。</div>
+<h2 id="storage">1. 默认保存位置</h2>
+<p>顶部“保存设置 → 默认保存位置…”可设置PCAP目录，默认是当前用户桌面下的 <code>FlowGuard-PCAP</code>，不会写死盘符或用户名。该目录用于本段临时写盘及结束时建议的位置，最终弹窗仍可选择其他文件夹；设置对下一段记录生效。</p>
+<p>“保存设置 → 数据保存位置…”以及资源页的设置按钮可同时检查日志和PCAP默认位置。日志默认位于程序旁 <code>data/runs</code>，日志设置保存于程序旁 <code>data/storage.ini</code>，修改后下次启动生效。PCAP默认位置通过当前用户设置记住。环境变量 <code>FLOWGUARD_LOG_ROOT</code> 优先于日志设置。目录写入失败会明确提示，不静默换盘。</p>
+<h2 id="capture">2. 开始、停止和更换网卡</h2>
+<ol>
+<li>网卡下拉框选择实际联网的 WLAN（无线）或 Ethernet（有线），不要仅凭“已连接”判断；VPN、虚拟机网卡可能也显示已连接。没有数据时先检查网卡是否选对。</li>
+<li>第一次测试让<strong>捕获过滤 BPF 留空</strong>，截取长度保持 <strong>65535</strong>，混杂模式可不勾选。</li>
+<li>点击<strong>开始采集</strong>，正常浏览网页或使用自己的联网应用，观察累计报文和流量增加。采集无需一直停留在报文页。</li>
+<li>点击<strong>停止</strong>结束采集并保留列表和统计。若开启了报文保存，有数据时会弹出最终保存窗口；无数据时清理空文件并提示。新会话替换列表与统计，不删除以前正式保存的文件。</li>
+</ol>
+<p>采集中网卡、BPF 和截取长度会锁定。混杂模式不保证能看到交换网络中其他电脑的全部流量。底栏“本次采集时长”随采集增加，停止后冻结，重开会话后归零。</p>
+
+<h2 id="filter">3. 筛选和查看报文</h2>
+<table><tr><th>功能</th><th>怎么用</th><th>会影响什么</th></tr>
+<tr><td>捕获过滤 BPF</td><td>开始前填写，例如 <code>tcp</code>、<code>udp</code> 或 <code>udp or tcp</code>。首次验收留空。</td><td>进入程序的报文范围；因此影响采集、统计和保存。</td></tr>
+<tr><td>显示筛选</td><td>在报文页选协议，可输入完整源/目的 IP 或端口，然后点“应用”。多个条件共同生效；点“重置”清除。</td><td>只改变列表显示，不改变会话累计统计和保存内容。</td></tr>
+<tr><td>报文详情树</td><td>点击列表中一条报文，查看下方协议字段，可展开 Ethernet、IPv4/IPv6、TCP/UDP、DNS 等节点。</td><td>查看该报文的字段。异常或截短报文只能展示安全取得的字段。</td></tr>
+</table>
+<p>TCP 可查看序列号、确认号、SYN/ACK 等标志、窗口和校验和；IPv4 可查看总长度、标识、分片、TTL；IPv6 可查看流标签、负载长度、Hop Limit。校验和是捕获值，不表示软件验证过正确性；选项以原始字节展示。</p>
+<p><strong>实时采集列表</strong>只保留最近2000条，旧记录淘汰不等于采集或保存丢包。<strong>打开PCAP文件</strong>读取完成后则提供完整分页：默认显示第1页，从文件第1包开始；用“首页 / 上一页 / 下一页 / 末页”及页码跳转查看全部报文，每页最多2000条，不会永久丢弃文件前面的记录。文件模式的显示筛选覆盖整个文件，并重新回到筛选结果第1页；实时模式的筛选只针对最近的记录。索引或翻页时显示“处理中”，大文件或重新筛选需要等待。</p>
+
+<h2 id="charts">4. 看懂统计分析页</h2>
+<p>点击左侧<strong>统计分析</strong>，先看顶部协议汇总统计表，再向下滚动查看八张图。切换显示筛选不会改变这些会话统计。</p>
+<table><tr><th>表或图</th><th>含义与核对方法</th></tr>
+<tr><td>协议汇总表</td><td>各协议会话累计包数及占总包数比例。网络分类 IPv4+IPv6+ARP+Other 应等于总包数；TCP/UDP/ICMP/DNS 跨层重叠，不可把所有行相加当总包数。</td></tr>
+<tr><td>长度频次折线图</td><td>各原始报文长度出现的次数。大于65535字节的长度合并到标记65536的桶。</td></tr>
+<tr><td>长度三区间柱状图</td><td>≤46 B、47–1500 B、&gt;1500 B 三组；三组累计数应等于总包数。</td></tr>
+<tr><td>网络分类柱状图、网络占比图</td><td>IPv4、IPv6、其他；这里的“其他”包含 ARP，而汇总表把 ARP 单独列出。</td></tr>
+<tr><td>TCP / UDP / ARP 柱状图</td><td>这三类的累计数量，并不涵盖所有报文。</td></tr>
+<tr><td>DNS 报文区间占比曲线</td><td>每个时间区间 DNS 包数÷该区间全部包数。加密 DNS 可能无法识别，因此始终为零不一定是故障。</td></tr>
+<tr><td>包速率、字节速率曲线</td><td>随捕获时间变化的 pkt/s 和 KiB/s。屏幕保留有界时间窗口，不能把图的横轴当作整个软件的运行时长。</td></tr>
+</table>
+<p>IPv6、ARP、DNS 没有数据可能是当前网络没产生相应报文。可用固定样本覆盖这些情况，不要仅凭某根柱子为零判断程序失效。</p>
+<p><strong>图表读数：</strong>所有折线图（包括CPU、内存）都支持采样点吸附、定位线和高对比提示卡；鼠标不必精确碰到细线，X轴附近也能读取。低值曲线按当前数据自动缩放，提示中的单位及数值仍是真实值。柱状图在对应分类区域内悬停即可查看包数和占本图所列类别的比例，零高度柱也可读取；饼图在扇区悬停时高亮，并显示类别、包数和占比。提示随定时刷新更新，移开后隐藏。不同图或不同时刻的自动纵轴范围可能不同，请比较标注数值，不要只比较曲线高度。</p>
+
+<h2 id="save">5. 分段保存与回读</h2>
+<table><tr><th>操作</th><th>结果</th></tr>
+<tr><td>采集前点击“开始保存报文”</td><td>显示等待采集，不创建PCAP；随后开始采集即可从第一包保存。再次点击可取消等待。</td></tr>
+<tr><td>采集中点击“开始保存报文”</td><td>立即提交记录请求，后台开始写入后续处理的原始报文，不弹路径选择窗口，也不能补存此前没有保存的原始字节。</td></tr>
+<tr><td>结束保存</td><td>先关闭并刷新临时文件，再弹标准保存窗口。默认目录为本段记录目录，建议文件名为实际首末报文捕获时间段；可改名或改目录。结束保存不停止实时采集，可另起一段。</td></tr>
+<tr><td>取消最终保存</td><td>“取消并丢弃”会删除本段临时文件，不保留待保存状态。磁盘写入或转存失败不等同取消，会保留原记录并提示位置。</td></tr>
+<tr><td>切换PCAP分析</td><td>成功打开文件会取消零报文保存等待，保存按钮置灰。取消打开或打开失败则保留等待。分析完成后，选择网卡或“文件 → 准备实时采集”，保存开关默认关闭。</td></tr></table>
+<p>临时文件名为 <code>.recording-唯一编号.pcap</code>，报文持续写盘而非积压在内存。正式保存后可通过“打开PCAP”重新导入；重读包数应等于本段实际保存数。中途记录的文件不包含之前未保存的报文，文件序号重新从1开始。超过2000包时仍可完整分页查看。</p>
+<p>单段写入上限沿用1 GiB；达到上限或发生I/O错误会停止该段写入并显示错误，采集分析继续。错误时临时文件保留供检查，不能声称已经完整保存。支持经典PCAP，暂不支持PCAPNG；跨盘转存使用后台流式复制，成功后才清理原临时文件。</p>
+<h3>预警监测</h3>
+<p>侧边“预警监测”包含SYN请求异常、ICMP/ICMPv6回声请求频率异常、TCP端口扫描、UDP高频和ARP映射变化。实时和PCAP共用后台检测；修改规则后按新标准重评，文件模式自动重扫受影响规则，其他统计和分页不重置。告警是规则命中线索，不等于已确认攻击。显示筛选不影响检测；BPF、丢包及不支持的链路类型会限制证据。</p>
+<p>可导入 <code>tests/data/alerts-demo.pcap</code> 验证五类告警，或 <code>tests/data/alerts-normal.pcap</code> 检查正常低频流量。修改SYN阈值500→1000后该告警撤下，改成100后重新出现。</p>
+<h2>6. 资源监控与日志</h2>
+<p>点击<strong>资源监控</strong>，查看 CPU、内存、I/O、驱动丢弃、已保存原始报文数和 CPU/内存曲线。全程保存时保存数跟随总数增长；中途保存只统计开启后的部分。CPU 是占整机能力的比例；I/O 为整个进程累计读写量，不等于 PCAP 文件大小。短期内存增长不能单独证明内存泄漏。</p>
+<p>点击<strong>打开运行日志目录</strong>可以找到本次记录。每次启动会新建一个运行子目录：</p>
+<table><tr><th>文件</th><th>作用</th></tr>
+<tr><td><code>run.json</code></td><td>启动时间、版本、程序哈希、运行环境。</td></tr>
+<tr><td><code>resources.csv</code></td><td>每秒 CPU、内存、处理/保存数量、队列、丢弃和界面延迟，可供测试后分析。</td></tr>
+<tr><td><code>events.jsonl</code></td><td>开始、停止、保存等操作和错误事件。</td></tr>
+<tr><td><code>result.json</code></td><td>正常退出后才写入的收尾记录。采集停止而软件未退出时，没有这个文件是正常的。</td></tr></table>
+
+<h2 id="test">7. 你来操作的20分钟验收流程</h2>
+<p>保持软件连续打开，停止或重开采集会话如实记录。20分钟是功能与短时稳定性检查，不能替代至少24小时的真实运行证据。</p>
+<table><tr><th>时间</th><th>操作</th><th>核对</th></tr>
+<tr><td>0–4分钟</td><td>打开stage1-protocols.pcap，检查字段树、协议汇总表、八张图和显示筛选。</td><td>18包、1156原始字节；筛选不改统计，悬停提示可读。</td></tr>
+<tr><td>4–10分钟</td><td>准备实时采集，先开启保存再开始；正常使用网络并切换资源页。</td><td>第一包开始记录，界面正常响应。结束保存后确认名称、位置，采集继续。</td></tr>
+<tr><td>10–14分钟</td><td>采集中再记录一段并结束，选择最终位置；停止后打开刚保存的PCAP。</td><td>重读数量是本段数量；超过2000包可翻页到末尾并返回第一包。</td></tr>
+<tr><td>14–18分钟</td><td>打开异常与正常样本，在预警页修改阈值、开关规则。</td><td>五类告警、动态增删和无告警基线符合预期；其他图表与计数不重置。</td></tr>
+<tr><td>18–20分钟</td><td>检查本次实际日志目录，正常退出。</td><td>result.json存在；记录真实卡顿、丢包、错误和未覆盖项目。</td></tr></table>
+<h2>8. 遇到问题怎么定位</h2>
+<ul><li><strong>没有报文：</strong>检查网卡、BPF、显示筛选；生成正常网络流量，必要时停止后换实际 WLAN/Ethernet 再试。</li>
+<li><strong>不能设置目录：</strong>先停止采集或回放；使用完整路径，检查目录权限及磁盘空间。</li>
+<li><strong>打开文件后总数变了：</strong>文件导入建立新会话，这是预期行为；先截图保存原结果。</li>
+<li><strong>列表少于总包数：</strong>实时页保留最近2000条；文件页读取完成后使用翻页，并检查是否启用了显示筛选。文件共多少包、筛选共匹配多少包、本页多少条会分别显示；切页不改变全文件统计。队列/驱动丢弃看资源记录。</li>
+<li><strong>需要反馈：</strong>提供操作步骤、报错原文、当时页面截图，以及本次运行日志目录。个人原始抓包不要直接上传 GitHub。</li></ul>
+</main></body></html>

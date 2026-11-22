@@ -1,5 +1,9 @@
 # FlowGuard 公共开发接口文档 v1.0
 
+## 融合更新
+
+`integration/alerts-required-acceptance` 同时保留预警/分段保存接口与队友 PCAP Reader 的 `recordPosition()`、`seekRecord()`，使用独立 PcapPager 在控制线程建立全文件筛选索引。分页只更新界面当前页，不把重读报文送入主统计或重复送入预警引擎。文件预警重算也使用独立 Reader。详见 [融合验收记录](integration-acceptance.md)。
+
 ## 2026-11-22 保存交互更新
 
 ProcessingSnapshot 新增本段写入包数 `savedSegmentPackets` 及可选首末时间 `savedFirstTimestamp`、`savedLastTimestamp`；`savedPackets` 继续表示会话累计。新增 `finishSaving()` 用于控制线程等待 writer 完成关闭，禁止在 GUI 线程调用。`enableSaving()` 接受后立即显示请求状态；关闭失败保留错误，不被禁用命令清空。Qt 通过临时文件、最终保存对话框和本机目录设置管理用户交互，见 [保存流程说明](recording-workflow.md)。
@@ -263,6 +267,8 @@ public:
     OperationResult open(const std::filesystem::path& path);
     PcapFileInfo info() const;
     ReadStatus readNext(RawPacket& packet, OperationResult& result);
+    std::optional<std::uint64_t> recordPosition() const;
+    OperationResult seekRecord(std::uint64_t offset);
     void close();
 private:
     struct Impl;

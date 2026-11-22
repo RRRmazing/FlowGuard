@@ -59,6 +59,7 @@ int main(int argc,char** argv) {
         wait([&]{return save->isEnabled();},"failed file open settled");
         check(status->text()==QStringLiteral("等待采集"),"failed file open preserves waiting state");
         w.openFile(QString::fromLocal8Bit(argv[1]));wait([&]{return w.fileCompleted();},"PCAP open completes");
+        wait([&]{return button(QStringLiteral("开始采集"))->isEnabled();},"file paging finishes before live preparation");
         check(!save->isEnabled()&&files().empty(),"PCAP mode disables saving and cancels empty waiting");
         auto prepareLive=[&]{for(auto* a:w.findChildren<QAction*>())if(a->text()==QStringLiteral("准备实时采集")){a->trigger();return;}throw std::runtime_error("live preparation action missing");};
         prepareLive();check(save->isEnabled()&&save->text()==QStringLiteral("开始保存报文"),"returning to live mode does not restore old waiting switch");
@@ -85,6 +86,16 @@ int main(int argc,char** argv) {
         check(readCount(answer)==initial&&files().empty(),"pre-armed recording contains every captured packet including first");
         check(button(QStringLiteral("停止"))->isEnabled(),"ending recording does not stop capture");
 
+        const auto unsavedBefore=w.totalPackets();send(8);wait([&]{return w.totalPackets()>=unsavedBefore+8;},"unsaved interval processed");
+        save->click();wait([&]{return save->isEnabled()&&save->text()==QStringLiteral("结束保存");},"start large later-only recording");
+        const auto largeBefore=w.totalPackets();bool sent=true;
+        for(int i=0;i<2600;++i){sent=sender.writeDatagram("owned-large-recording",QHostAddress::LocalHost,receiver.localPort())>0&&sent;
+            if(i%50==0)QTest::qWait(5);}
+        check(sent,"send owned large localhost interval");wait([&]{return w.totalPackets()>=largeBefore+2600;},"large interval processed");
+        const auto largeFile=owned.path()+"/later-2600.pcap";answer=largeFile;answerReady=true;save->click();
+        wait([&]{return QFileInfo::exists(largeFile)&&save->isEnabled();},"large interval finalized");
+        check(readCount(largeFile)==2600,"saved file contains all later packets beyond UI retention and excludes unsaved interval");
+
         save->click();wait([&]{return save->isEnabled()&&save->text()==QStringLiteral("结束保存");},"start second recording while live");
         const auto before=w.totalPackets();send(5);wait([&]{return w.totalPackets()>=before+5;},"second segment packets processed");
         answer.clear();answerReady=true;dialogHandled=false;save->click();
@@ -100,6 +111,14 @@ int main(int argc,char** argv) {
         send(4);answer=owned.path()+"/on-stop.pcap";answerReady=true;dialogHandled=false;w.requestStop();
         wait([&]{return QFileInfo::exists(answer)&&button(QStringLiteral("开始采集"))->isEnabled();},"stopping capture also offers final save");
         check(dialogHandled&&readCount(answer)>=4&&files().empty(),"automatic stop closes and finalizes PCAP");
+        w.openFile(largeFile);
+        auto* page=w.findChild<QSpinBox*>("filePageNumber");auto* packetTable=w.findChild<QTableView*>("packetTable");
+        wait([&]{return w.fileCompleted()&&w.totalPackets()==2600&&page&&page->isEnabled();},"own saved PCAP indexed for complete browsing");
+        check(packetTable&&packetTable->model()->rowCount()==2000&&packetTable->model()->index(0,0).data().toULongLong()==1,"saved PCAP first page starts at one");
+        w.findChild<QPushButton*>("nextFilePage")->click();wait([&]{return page->isEnabled()&&page->value()==2;},"saved PCAP second page loads");
+        check(packetTable->model()->rowCount()==600&&packetTable->model()->index(0,0).data().toULongLong()==2001&&packetTable->model()->index(599,0).data().toULongLong()==2600,"saved PCAP retains complete second page and original numbering");
+        w.findChild<QPushButton*>("firstFilePage")->click();wait([&]{return page->isEnabled()&&page->value()==1;},"saved PCAP can return to first page");
+        prepareLive();
         save->click();w.startDevice("\\Device\\NPF_{00000000-0000-0000-0000-000000000000}");
         wait([&]{return save->isEnabled();},"failed capture startup settled");
         check(status->text()==QStringLiteral("等待采集")&&files().empty(),"failed start preserves waiting without creating a file");
