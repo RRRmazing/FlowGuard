@@ -1,5 +1,15 @@
 # FlowGuard 公共开发接口文档 v1.0
 
+## 2026-11-22 保存交互更新
+
+ProcessingSnapshot 新增本段写入包数 `savedSegmentPackets` 及可选首末时间 `savedFirstTimestamp`、`savedLastTimestamp`；`savedPackets` 继续表示会话累计。新增 `finishSaving()` 用于控制线程等待 writer 完成关闭，禁止在 GUI 线程调用。`enableSaving()` 接受后立即显示请求状态；关闭失败保留错误，不被禁用命令清空。Qt 通过临时文件、最终保存对话框和本机目录设置管理用户交互，见 [保存流程说明](recording-workflow.md)。
+
+## 2026-11-22 预警扩展接口
+
+`feat/alert-monitoring` 基于 main `2bfd8dd` 新增独立预警模块。PacketRecord 增加可选 `icmpType`、`icmpCode`、`arpOpcode` 及 ARP 载荷发送方 MAC `arpSenderMac`；原字段含义不变。公共结构变化后必须重新构建所有调用方，不能混用旧对象文件。
+
+ProcessingSession 新增 `alertSnapshot()`、`configureAlerts(const AlertRules&)` 和 `pauseAlerts(bool)`，类型定义位于 `src/alerts/alert_engine.h`。规则设置使用现有控制线程串行调用；预警快照自带会话 ID、规则配置、待重算标记及数据质量提示。文件重新检测在独立线程执行，只发布受影响规则的结果，不触碰 StatisticsEngine、显示缓存及保存状态。具体窗口语义、资源边界与验收见 [预警监测说明](alert-monitoring.md)。
+
 ## 2026-11-22 第二阶段更新（优先于原分工）
 
 用户重新分工：何俊杰独立完成第二阶段“处理与存储”，谢福祥独立完成第三阶段

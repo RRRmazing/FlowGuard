@@ -4,6 +4,8 @@
 #include "ui/chart_panel.h"
 #include "ui/device_selector.h"
 #include "ui/packet_model.h"
+#include "ui/alert_panel.h"
+#include "storage/recording_files.h"
 #include <QDesktopServices>
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -95,6 +97,10 @@ struct MainWindow::Impl
     ResourceSample resource;
     std::deque<std::pair<double, ResourceSample>> resourceHistory;
     bool busy = false, closing = false, allowClose = false;
+    bool saveArmed = false, fileMode = false, finishingSave = false, closeAfterSave = false;
+    QString stagingPath, recordingNotice;
+    QLabel *saveState = nullptr;
+    QAction *livePreparation = nullptr;
     QString recordPath, recordError, controlError, lastState, lastSavingError, lastSourceError;
     QTimer *poll, *second;
     DeviceSelector *devices = nullptr;
@@ -121,6 +127,33 @@ struct MainWindow::Impl
     ChartPanel *charts = nullptr;
     QChartView *cpuView = nullptr, *memoryView = nullptr;
     QStackedWidget *pages = nullptr;
+    AlertPanel *alerts = nullptr;
+    QListWidget *navigation = nullptr;
+    std::map<std::string, std::string> loggedAlerts; // Recorder thread only.
+    std::uint64_t loggedAlertSession = 0;
+    void recordAlerts()
+    {
+        const auto s = backend.alertSnapshot();
+        if (loggedAlertSession != s.sessionId) { loggedAlerts.clear(); loggedAlertSession = s.sessionId; }
+        std::map<std::string, std::string> next;
+        for (const auto& a : s.records) {
+            if(s.rebuilding[std::size_t(a.rule)]) continue;
+            const auto key = std::to_string(int(a.rule))+":"+a.key;
+            const auto signature = std::to_string(a.active)+":"+std::to_string(a.config.threshold)+":"+std::to_string(a.config.windowSeconds);
+            next[key] = signature;
+            if(loggedAlerts[key] == signature) continue;
+            recorder.event("alert_changed",{{"session_id",num(s.sessionId)},{"rule",int(a.rule)},{"object",txt(a.key)},
+                {"active",a.active},{"peak",num(a.peak)},{"threshold",num(a.config.threshold)},{"window_seconds",int(a.config.windowSeconds)},
+                {"packet_sequence",num(a.packetSequence)},{"evidence",txt(a.evidence)}});
+        }
+        // Preserve entries during rebuilding; log removal only once new results are ready.
+        for(const auto& old : loggedAlerts) if(!next.count(old.first)) {
+            const auto index=std::size_t(old.first[0]-'0');
+            if(s.rebuilding[index] || !s.error.empty()) next.insert(old);
+            else recorder.event("alert_removed",{{"session_id",num(s.sessionId)},{"object_key",txt(old.first)}});
+        }
+        loggedAlerts=std::move(next);
+    }
     explicit Impl(MainWindow *window) : w(window), poll(new QTimer(window)), second(new QTimer(window))
     {
         uptime.start();
@@ -133,7 +166,8 @@ struct MainWindow::Impl
     {
         return snapshot.state == ProcessingState::Running || snapshot.state == ProcessingState::Paused;
     }
-    void command(const QString &name, std::function<OperationResult()> fn, QJsonObject detail = {})
+    void command(const QString &name, std::function<OperationResult()> fn, QJsonObject detail = {},
+                 std::function<void(const OperationResult&)> done = {})
     {
         if (busy || closing)
             return;
@@ -142,7 +176,7 @@ struct MainWindow::Impl
         updateControls();
         QMetaObject::invokeMethod(
             worker,
-            [this, name, fn = std::move(fn), detail] {
+            [this, name, fn = std::move(fn), detail, done = std::move(done)] {
                 recorder.event("control_requested", {{"name", name}, {"settings", detail}});
                 OperationResult result;
                 try
@@ -169,10 +203,11 @@ struct MainWindow::Impl
                                                         {"late_history_packets", num(s.lateHistoryPackets)}}}});
                 QMetaObject::invokeMethod(
                     w,
-                    [this, result] {
+                    [this, result, done] {
                         busy = false;
                         if (!result.ok())
                             controlError = txt(result.message);
+                        if(done) done(result);
                         tick();
                     },
                     Qt::QueuedConnection);
@@ -181,22 +216,29 @@ struct MainWindow::Impl
     }
     void updateControls()
     {
-        const bool idle = !active() && !busy && !closing;
+        const bool blocked = busy || closing || finishingSave;
+        const bool idle = !active() && !blocked && stagingPath.isEmpty();
         for (auto *widget : std::initializer_list<QWidget *>{devices, refresh, bpf, promiscuous, snapshotControl})
             widget->setEnabled(idle);
         snapshotUp->setEnabled(idle && snaplen->value() < snaplen->maximum());
         snapshotDown->setEnabled(idle && snaplen->value() > snaplen->minimum());
         start->setEnabled(idle && devices->count() > 0);
         open->setEnabled(idle);
-        stop->setEnabled(active() && !busy && !closing);
+        stop->setEnabled(active() && !blocked);
+        if(livePreparation) livePreparation->setEnabled(idle);
         if (pauseAction)
             pauseAction->setVisible(snapshot.source == ProcessingSource::File && active());
         pause->setEnabled(!busy && !closing);
         pause->setText(snapshot.state == ProcessingState::Paused ? QStringLiteral("继续回放")
                                                                  : QStringLiteral("暂停回放"));
-        save->setEnabled(active() && !busy && !closing);
-        save->setText(snapshot.savingActive || snapshot.savingRequested ? QStringLiteral("结束保存")
-                                                                        : QStringLiteral("保存后续报文"));
+        save->setEnabled(!fileMode && !blocked);
+        save->setText(finishingSave ? QStringLiteral("正在结束保存…") :
+            saveArmed ? QStringLiteral("取消保存等待") :
+            (!stagingPath.isEmpty() || snapshot.savingActive || snapshot.savingRequested) ? QStringLiteral("结束保存") : QStringLiteral("开始保存报文"));
+        save->setToolTip(fileMode ? QStringLiteral("PCAP 文件分析不提供保存。选择网卡或“文件 → 准备实时采集”后，可为下一次采集预先开启保存。") :
+            stagingPath.isEmpty() ? QStringLiteral("可提前开启等待实时采集；结束时确认文件名和位置。") : stagingPath);
+        if(saveState) saveState->setText(finishingSave ? QStringLiteral("正在收尾") : saveArmed ? QStringLiteral("等待采集") :
+            !stagingPath.isEmpty() ? (snapshot.savingActive ? QStringLiteral("记录中") : QStringLiteral("等待首包")) : recordingNotice);
         state->setToolTip(sourceDescription);
         state->setText(closing ? QStringLiteral("正在退出…")
                        : busy  ? QStringLiteral("处理中…")
@@ -212,6 +254,74 @@ struct MainWindow::Impl
             problems << QStringLiteral("日志：") + recordError;
         error->setText(problems.join('\n'));
         error->setVisible(!problems.empty());
+    }
+    void recordingDone()
+    {
+        stagingPath.clear(); finishingSave=false; saveArmed=false;
+        updateControls();
+        if(closeAfterSave) {closeAfterSave=false;QTimer::singleShot(0,w,[this]{w->close();});}
+    }
+    void settleRecording(const ProcessingSnapshot& final)
+    {
+        const auto temporary=stagingPath;
+        if(temporary.isEmpty()) {recordingDone();return;}
+        if(!final.savingError.ok()) {
+            controlError=(QFileInfo::exists(temporary)?QStringLiteral("报文记录出错，临时数据保留在：%1\n%2"):
+                QStringLiteral("未能创建报文记录文件：%1\n%2")).arg(temporary,txt(final.savingError.message));
+            closeAfterSave=false; recordingNotice=QStringLiteral("记录失败，请查看提示");
+            QMetaObject::invokeMethod(worker,[this,temporary,message=txt(final.savingError.message)] {
+                recorder.event("recording_error",{{"temporary",temporary},{"message",message}});
+            },Qt::QueuedConnection);
+            if(!qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE")) QMessageBox::warning(w,QStringLiteral("报文保存失败"),controlError);
+            recordingDone();return;
+        }
+        QString destination;
+        if(final.savedSegmentPackets && final.savedFirstTimestamp && final.savedLastTimestamp) {
+            auto date=[](auto t){return QDateTime::fromMSecsSinceEpoch(std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count());};
+            const auto name=RecordingFiles::suggestedName(date(*final.savedFirstTimestamp),date(*final.savedLastTimestamp));
+            QFileDialog dialog(w,QStringLiteral("保存本次报文（取消将丢弃本次记录）"),QDir(QFileInfo(temporary).absolutePath()).filePath(name),"PCAP (*.pcap)");
+            dialog.setObjectName("recordingSaveDialog");dialog.setAcceptMode(QFileDialog::AcceptSave);dialog.setDefaultSuffix("pcap");
+            dialog.setLabelText(QFileDialog::Reject,QStringLiteral("取消并丢弃"));
+            if(qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE")) dialog.setOption(QFileDialog::DontUseNativeDialog);
+            if(dialog.exec()==QDialog::Accepted && !dialog.selectedFiles().isEmpty()) destination=dialog.selectedFiles().front();
+        }
+        const bool overwrite=!destination.isEmpty() && QFileInfo::exists(destination); // Confirmed by the save dialog.
+        busy=true;updateControls();
+        QMetaObject::invokeMethod(worker,[this,temporary,destination,overwrite,packets=final.savedSegmentPackets] {
+            const auto problem=destination.isEmpty()?RecordingFiles::discard(temporary):RecordingFiles::publish(temporary,destination,overwrite);
+            recorder.event("recording_finished",{{"temporary",temporary},{"destination",destination},{"discarded",destination.isEmpty()},
+                {"packets",num(packets)},{"ok",problem.isEmpty()},{"message",problem}});
+            QMetaObject::invokeMethod(w,[this,temporary,destination,packets,problem] {
+                busy=false;
+                if(!problem.isEmpty()) {
+                    controlError=problem+QStringLiteral("\n原始记录位置：")+temporary;
+                    recordingNotice=QStringLiteral("保存失败，请查看提示");closeAfterSave=false;
+                    if(!qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE")) QMessageBox::warning(w,QStringLiteral("保存失败"),controlError);
+                } else recordingNotice=destination.isEmpty()?(packets?QStringLiteral("本次记录已丢弃"):QStringLiteral("没有可保存的报文")):QStringLiteral("报文已保存");
+                recordingDone();
+            },Qt::QueuedConnection);
+        },Qt::QueuedConnection);
+    }
+    void finishRecording()
+    {
+        if(finishingSave || busy || closing) return;
+        finishingSave=true;saveArmed=false;
+        command("finish_recording",[this]{return backend.finishSaving();},{},[this](const OperationResult&){settleRecording(backend.snapshot());});
+    }
+    void toggleRecording()
+    {
+        if(fileMode || busy || closing || finishingSave) return;
+        if(saveArmed) {saveArmed=false;recordingNotice=QStringLiteral("已取消保存等待");updateControls();return;}
+        if(!stagingPath.isEmpty()) {finishRecording();return;}
+        if(snapshot.savingActive || snapshot.savingRequested) {command("finish_saving",[this]{return backend.finishSaving();});return;}
+        recordingNotice.clear();
+        if(!active()) {saveArmed=true;updateControls();return;}
+        QString problem;
+        stagingPath=RecordingFiles::prepare(RecordingFiles::defaultDirectory(),problem);
+        if(stagingPath.isEmpty()) {controlError=problem;updateControls();return;}
+        const auto path=stagingPath;
+        command("begin_recording",[this,path]{return backend.enableSaving(std::filesystem::path(path.toStdWString()));},{{"temporary",path}},
+            [this](const OperationResult& result){if(!result.ok())stagingPath.clear();});
     }
     void refreshDevices()
     {
@@ -350,6 +460,9 @@ struct MainWindow::Impl
         }
         const auto old = snapshot;
         snapshot = backend.snapshot();
+        if(!stagingPath.isEmpty() && !busy && !finishingSave && !closing && (!active() || !snapshot.savingError.ok())) {
+            finishRecording();
+        }
         if (old.sessionId != snapshot.sessionId)
         {
             model->clear();
@@ -423,6 +536,7 @@ struct MainWindow::Impl
                     const auto r = sampleResources();
                     recorder.sample(s, r, guiDelay.exchange(0),
                                     guiSession.load() == s.sessionId ? listEvicted.load() : 0);
+                    recordAlerts();
                     const auto key =
                         num(s.sessionId) + ":" + QString::number(int(s.state)) + ":" + QString::number(s.savingActive);
                     if (key != lastState)
@@ -473,6 +587,10 @@ struct MainWindow::Impl
     }
     void updateSecond()
     {
+        const auto alertState = backend.alertSnapshot();
+        alerts->refresh(alertState, sourceDescription, active(), snapshot.state == ProcessingState::Paused);
+        navigation->item(3)->setText(QStringLiteral("预警监测") +
+            (alerts->unconfirmedCount() ? QStringLiteral(" · %1").arg(alerts->unconfirmedCount()) : QString()));
         if (pages->currentIndex() == 1)
             charts->refresh(snapshot, sourceDescription);
         auto opt = [](const auto &n) { return n ? QString::number(*n) : QStringLiteral("不可用"); };
@@ -493,7 +611,7 @@ struct MainWindow::Impl
                            "CPU 占整机能力；I/O 是进程累计读写量，不是物理磁盘吞吐。")
                 .arg(opt(snapshot.capture.driverReceived), opt(snapshot.capture.driverDropped),
                      opt(snapshot.capture.interfaceDropped), num(snapshot.savedPackets)));
-        const QString saving = snapshot.savingActive      ? QStringLiteral("保存中")
+        const QString saving = finishingSave ? QStringLiteral("正在结束保存") : saveArmed ? QStringLiteral("等待采集") : snapshot.savingActive      ? QStringLiteral("保存中")
                                : snapshot.savingRequested ? QStringLiteral("等待首包/准备保存")
                                                           : QStringLiteral("未保存");
         recordLabel->setText(
@@ -550,8 +668,26 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     auto *fileAction = file->addAction(QStringLiteral("打开 PCAP…"));
     fileAction->setShortcut(QKeySequence::Open);
     connect(fileAction, &QAction::triggered, this, [this] { d->chooseFile(); });
+    d->livePreparation=file->addAction(QStringLiteral("准备实时采集"));
+    connect(d->livePreparation,&QAction::triggered,this,[this] {
+        d->fileMode=false;d->recordingNotice=QStringLiteral("实时采集准备就绪");d->updateControls();
+    });
     file->addSeparator();
     connect(file->addAction(QStringLiteral("退出")), &QAction::triggered, this, &QWidget::close);
+    auto *savingMenu=menuBar()->addMenu(QStringLiteral("保存设置"));
+    auto *location=savingMenu->addAction(QStringLiteral("默认保存位置…"));
+    location->setObjectName("defaultPcapDirectory");
+    connect(location,&QAction::triggered,this,[this] {
+        const auto chosen=QFileDialog::getExistingDirectory(this,QStringLiteral("选择默认 PCAP 保存目录（对下一段记录生效）"),RecordingFiles::defaultDirectory());
+        if(!chosen.isEmpty()) {
+            const auto problem=RecordingFiles::setDefaultDirectory(chosen);
+            if(!problem.isEmpty())QMessageBox::warning(this,QStringLiteral("保存设置失败"),problem);
+        }
+    });
+    auto *showLocation=savingMenu->addAction(QStringLiteral("查看默认保存位置"));
+    connect(showLocation,&QAction::triggered,this,[this] {
+        QMessageBox::information(this,QStringLiteral("默认 PCAP 保存位置"),QDir::toNativeSeparators(RecordingFiles::defaultDirectory()));
+    });
     auto *help = menuBar()->addMenu(QStringLiteral("帮助"));
     connect(help->addAction(QStringLiteral("关于")), &QAction::triggered, this, [this, version] {
         QMessageBox::information(
@@ -576,7 +712,9 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     d->open = button(QStringLiteral("打开 PCAP"));
     d->pause = button(QStringLiteral("暂停回放"));
     d->pauseAction = toolbar->actions().back();
-    d->save = button(QStringLiteral("保存后续报文"));
+    d->save = button(QStringLiteral("开始保存报文"));
+    d->save->setObjectName("recordPackets");
+    d->saveState=new QLabel;d->saveState->setObjectName("recordingStatus");toolbar->addWidget(d->saveState);
     d->state = new QLabel;
     toolbar->addWidget(d->state);
     auto *central = new QWidget;
@@ -629,6 +767,9 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     outer->addLayout(capture);
     connect(d->devices, &QComboBox::currentIndexChanged, this,
             [this] { d->devices->setToolTip(d->devices->currentData(Qt::ToolTipRole).toString()); });
+    connect(d->devices,&QComboBox::activated,this,[this] {
+        if(!d->active() && !d->busy) {d->fileMode=false;d->recordingNotice.clear();d->updateControls();}
+    });
     d->error = new QLabel;
     d->error->setWordWrap(true);
     d->error->setStyleSheet("color:#9b361f;background:#fff0db;padding:8px;");
@@ -636,7 +777,8 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     auto *body = new QHBoxLayout;
     outer->addLayout(body, 1);
     auto *nav = new QListWidget;
-    nav->addItems({QStringLiteral("报文工作台"), QStringLiteral("统计分析"), QStringLiteral("资源监控")});
+    d->navigation = nav;
+    nav->addItems({QStringLiteral("报文工作台"), QStringLiteral("统计分析"), QStringLiteral("资源监控"),QStringLiteral("预警监测")});
     nav->setFixedWidth(150);
     body->addWidget(nav);
     d->pages = new QStackedWidget;
@@ -778,6 +920,43 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
     resScroll->setWidgetResizable(true);
     resScroll->setWidget(res);
     d->pages->addWidget(resScroll);
+    d->alerts = new AlertPanel;
+    auto *alertScroll = new QScrollArea;
+    alertScroll->setWidgetResizable(true);
+    alertScroll->setWidget(d->alerts);
+    d->pages->addWidget(alertScroll);
+    d->alerts->applyRules = [this](const AlertRules& rules) {
+        if(d->closing) return;
+        QJsonArray configs;
+        for (const auto& r : rules) configs.append(QJsonObject{{"enabled",r.enabled},{"window_seconds",int(r.windowSeconds)},
+            {"threshold",num(r.threshold)}});
+        // Rule edits must not be discarded by the toolbar's busy-command guard.
+        // Queue every applied snapshot on the same control thread; the monitor
+        // cancels superseded rescans and only publishes the latest revision.
+        QMetaObject::invokeMethod(d->worker,[this,rules,configs] {
+            d->recorder.event("control_requested",{{"name","configure_alerts"},{"settings",QJsonObject{{"rules",configs}}}});
+            OperationResult result;
+            try { result=d->backend.configureAlerts(rules); }
+            catch(const std::exception& e) {result={ErrorCode::ResourceLimit,e.what()};}
+            d->recorder.event("control_finished",{{"name","configure_alerts"},{"ok",result.ok()},{"message",txt(result.message)}});
+            QMetaObject::invokeMethod(this,[this,result] {
+                d->controlError=result.ok()?QString():txt(result.message);
+                d->updateSecond();
+            },Qt::QueuedConnection);
+        },Qt::QueuedConnection);
+    };
+    d->alerts->pauseDetection = [this](bool paused) {
+        d->command("pause_alerts",[this,paused]{d->backend.pauseAlerts(paused);return OperationResult{};},{{"paused",paused}});
+    };
+    d->alerts->relatedPackets = [this](const AlertRecord& a) {
+        d->ip->setText(txt(a.targetIp));
+        d->port->setText(a.targetPort ? QString::number(*a.targetPort) : QString());
+        d->protocol->setCurrentText(a.rule==AlertRule::Arp?QStringLiteral("ARP"):
+            a.rule==AlertRule::Udp?QStringLiteral("UDP"):
+            (a.rule==AlertRule::Syn || a.rule==AlertRule::PortScan)?QStringLiteral("TCP"):QStringLiteral("全部协议"));
+        d->applyFilter(); d->navigation->setCurrentRow(0);
+        if (!d->model->rowCount()) d->summary->setText(QStringLiteral("最近报文缓存中没有匹配记录；较旧报文需通过原 PCAP 复查。"));
+    };
     auto *bottom = statusBar();
     bottom->setSizeGripEnabled(false);
     bottom->setStyleSheet("QStatusBar{border-top:1px solid #cad6e3;background:#edf3f8;} QStatusBar::item{border:0;} "
@@ -804,22 +983,7 @@ MainWindow::MainWindow(const QString &version, QWidget *parent) : QMainWindow(pa
         const bool paused = d->snapshot.state == ProcessingState::Paused;
         d->command("pause_resume", [this, paused] { return paused ? d->backend.resume() : d->backend.pause(); });
     });
-    connect(d->save, &QPushButton::clicked, this, [this] {
-        if (d->snapshot.savingActive || d->snapshot.savingRequested)
-        {
-            d->command("disable_saving", [this] {
-                d->backend.disableSaving();
-                return OperationResult{};
-            });
-            return;
-        }
-        const auto path = QFileDialog::getSaveFileName(this, QStringLiteral("保存后续原始报文（不覆盖已有文件）"), {},
-                                                       "PCAP (*.pcap)");
-        if (!path.isEmpty())
-            d->command("enable_saving",
-                       [this, path] { return d->backend.enableSaving(std::filesystem::path(path.toStdWString())); },
-                       {{"path", path}, {"max_bytes", "1073741824"}});
-    });
+    connect(d->save, &QPushButton::clicked, this, [this] {d->toggleRecording();});
     connect(apply, &QPushButton::clicked, this, [this] { d->applyFilter(); });
     connect(reset, &QPushButton::clicked, this, [this] {
         d->protocol->setCurrentIndex(0);
@@ -852,6 +1016,7 @@ MainWindow::~MainWindow()
                 if (d->recorderTimer)
                     d->recorderTimer->stop();
                 d->backend.stop();
+                d->recordAlerts();
                 d->recorder.finish(d->backend.snapshot());
             },
             Qt::BlockingQueuedConnection);
@@ -861,7 +1026,7 @@ MainWindow::~MainWindow()
 }
 void MainWindow::openFile(const QString &path, bool paced, double speed)
 {
-    if (d->active() || d->busy)
+    if (d->active() || d->busy || d->finishingSave || !d->stagingPath.isEmpty())
         return;
     if (d->snapshot.statistics.totalPackets && !qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE") &&
         QMessageBox::question(this, QStringLiteral("新会话"), QStringLiteral("新会话将替换当前列表与统计，继续？")) !=
@@ -870,16 +1035,23 @@ void MainWindow::openFile(const QString &path, bool paced, double speed)
     ProcessingOptions options;
     options.pacedReplay = paced;
     options.replaySpeed = speed;
-    d->sourceDescription = QStringLiteral("文件：") + path +
-                           (paced ? QStringLiteral(" · 按捕获时间回放 %1×").arg(speed) : QStringLiteral(" · 快速导入"));
     d->command(
         "start_file",
-        [this, path, options] { return d->backend.startFile(std::filesystem::path(path.toStdWString()), options); },
-        {{"path", path}, {"paced", paced}, {"speed", speed}});
+        [this, path, options] {
+            const auto file=std::filesystem::path(path.toStdWString());
+            PcapReader probe;const auto valid=probe.open(file);if(!valid.ok())return valid;
+            probe.close();return d->backend.startFile(file, options);
+        },
+        {{"path", path}, {"paced", paced}, {"speed", speed}},
+        [this,path,paced,speed](const OperationResult& result) {
+            if(!result.ok())return;
+            d->recordingNotice=d->saveArmed?QStringLiteral("已取消保存等待"):QString();d->saveArmed=false;d->fileMode=true;
+            d->sourceDescription=QStringLiteral("文件：")+path+(paced?QStringLiteral(" · 按捕获时间回放 %1×").arg(speed):QStringLiteral(" · 快速导入"));
+        });
 }
 void MainWindow::startDevice(const QString &id, const QString &bpf, const QString &initialSavePath)
 {
-    if (d->active() || d->busy)
+    if (d->active() || d->busy || d->finishingSave || !d->stagingPath.isEmpty())
         return;
     if (d->snapshot.statistics.totalPackets && !qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE") &&
         QMessageBox::question(this, QStringLiteral("新会话"), QStringLiteral("新会话将替换当前列表与统计，继续？")) !=
@@ -897,14 +1069,26 @@ void MainWindow::startDevice(const QString &id, const QString &bpf, const QStrin
     ProcessingOptions processing;
     if (!initialSavePath.isEmpty())
         processing.savePath = std::filesystem::path(initialSavePath.toStdWString());
+    else if(d->saveArmed) {
+        QString problem;
+        d->stagingPath=RecordingFiles::prepare(RecordingFiles::defaultDirectory(),problem);
+        if(d->stagingPath.isEmpty()){d->controlError=problem;d->updateControls();return;}
+        processing.savePath=std::filesystem::path(d->stagingPath.toStdWString());
+    }
     d->command("start_live", [this, options, processing] { return d->backend.startLive(options, processing); },
                {{"device", id},
                 {"bpf", bpf},
                 {"promiscuous", options.promiscuous},
-                {"snapshot_length", int(options.snapshotLength)}});
+                {"snapshot_length", int(options.snapshotLength)}},
+                [this](const OperationResult& result){
+                    if(result.ok()){d->saveArmed=false;d->fileMode=false;d->recordingNotice.clear();}
+                    else d->stagingPath.clear();
+                });
 }
 void MainWindow::requestStop()
 {
+    if(d->finishingSave || d->busy)return;
+    d->saveArmed=false;
     d->command("stop", [this] {
         d->backend.stop();
         return OperationResult{};
@@ -936,10 +1120,17 @@ void MainWindow::closeEvent(QCloseEvent *event)
     event->ignore();
     if (d->closing)
         return;
+    if(d->busy || d->finishingSave)return;
     if (d->active() && !qEnvironmentVariableIsSet("FLOWGUARD_ACCEPTANCE") &&
         QMessageBox::question(this, QStringLiteral("结束运行"), QStringLiteral("停止当前会话并关闭保存后退出？")) !=
             QMessageBox::Yes)
         return;
+    if(!d->stagingPath.isEmpty()) {
+        d->closeAfterSave=true;
+        if(d->active()) requestStop();else d->finishRecording();
+        return;
+    }
+    d->saveArmed=false;
     d->closing = true;
     d->updateControls();
     d->poll->stop();
@@ -953,6 +1144,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
             const auto final = d->backend.snapshot();
             d->recorder.sample(final, sampleResources(), d->guiDelay.load(),
                                d->guiSession.load() == final.sessionId ? d->listEvicted.load() : 0);
+            d->recordAlerts();
             d->recorder.finish(final);
             const auto err = d->recorder.error();
             QMetaObject::invokeMethod(

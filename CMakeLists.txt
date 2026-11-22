@@ -145,7 +145,7 @@ set_tests_properties(parser_protocol_boundaries PROPERTIES TIMEOUT 30)
 add_library(flowguard_statistics STATIC src/statistics/statistics.cpp)
 target_include_directories(flowguard_statistics PUBLIC src)
 flowguard_configure_cpp(flowguard_statistics)
-add_library(flowguard_processing STATIC src/processing/processing_session.cpp)
+add_library(flowguard_processing STATIC src/processing/processing_session.cpp src/alerts/alert_engine.cpp)
 target_include_directories(flowguard_processing PUBLIC src)
 target_link_libraries(flowguard_processing PUBLIC flowguard_capture flowguard_parser flowguard_storage flowguard_statistics)
 flowguard_configure_cpp(flowguard_processing)
@@ -160,6 +160,12 @@ flowguard_configure_cpp(flowguard_stage2_tests)
 set_target_properties(flowguard_stage2_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 add_test(NAME stage2_processing_storage COMMAND flowguard_stage2_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
 set_tests_properties(stage2_processing_storage PROPERTIES TIMEOUT 30)
+add_executable(flowguard_alert_tests tests/alert_tests.cpp)
+target_link_libraries(flowguard_alert_tests PRIVATE flowguard_processing)
+flowguard_configure_cpp(flowguard_alert_tests)
+set_target_properties(flowguard_alert_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_test(NAME alert_detection COMMAND flowguard_alert_tests "${CMAKE_CURRENT_BINARY_DIR}/alert-test.pcap")
+set_tests_properties(alert_detection PROPERTIES TIMEOUT 30)
 
 # Stage 3: Qt adapter, required charts, process resources, durable run evidence.
 execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -173,7 +179,8 @@ else()
 endif()
 configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 add_library(flowguard_ui_support STATIC
-    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp
+    src/ui/display_filter.cpp src/ui/packet_model.cpp src/ui/device_selector.cpp src/ui/device_system_info.cpp src/ui/alert_panel.cpp
+    src/storage/recording_files.cpp
     src/monitoring/resource_sampler.cpp src/monitoring/run_recorder.cpp)
 target_include_directories(flowguard_ui_support PUBLIC src PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(flowguard_ui_support PUBLIC flowguard_processing Qt6::Widgets Qt6::Network psapi iphlpapi)
@@ -193,6 +200,18 @@ add_test(NAME stage3_gui_file COMMAND FlowGuard --accept-file "${CMAKE_CURRENT_S
 set_tests_properties(stage3_gui_file PROPERTIES TIMEOUT 20
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FLOWGUARD_LOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/acceptance-runs")
 find_package(Qt6 REQUIRED COMPONENTS Test)
+add_executable(flowguard_recording_tests tests/recording_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
+target_link_libraries(flowguard_recording_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
+flowguard_configure_cpp(flowguard_recording_tests)
+add_test(NAME recording_workflow COMMAND flowguard_recording_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stage1-protocols.pcap")
+set_tests_properties(recording_workflow PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77 LABELS "hardware" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(flowguard_alert_gui_tests tests/alert_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
+target_link_libraries(flowguard_alert_gui_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
+flowguard_configure_cpp(flowguard_alert_gui_tests)
+add_test(NAME alert_gui_integration COMMAND flowguard_alert_gui_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/alerts-demo.pcap" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/alerts-normal.pcap"
+    "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(alert_gui_integration PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(flowguard_stage3_gui_tests tests/stage3_gui_tests.cpp src/ui/main_window.cpp src/ui/chart_panel.cpp)
 target_link_libraries(flowguard_stage3_gui_tests PRIVATE flowguard_ui_support Qt6::Charts Qt6::Test)
 flowguard_configure_cpp(flowguard_stage3_gui_tests)

@@ -30,3 +30,9 @@ PCAP 字节序、精度和残缺文件在 `tests/pcap_reader_tests.cpp` 内生�
 独立 TShark 比较脚本为 `tests/tshark_compare.py`，可选注册到标准 CTest。
 已通过 18 包/312 字段对照；按 JSON 清单中的包号与离线程序字段输出比较。
 真实报文证据仅保存在 build/stage1-evidence，不提交 Git。
+
+## 预警固定样本
+
+`alerts-demo.pcap`：2082 个离线构造报文，默认规则触发 SYN、扫描、ICMP、UDP、ARP 五类预警。
+`alerts-normal.pcap`：52 个低频 TCP、ICMP 和稳定 ARP 报文，默认规则无预警。
+生成入口为 `python tests/generate_alert_samples.py`，不会发送流量；验收步骤见 `docs/alert-monitoring.md`。

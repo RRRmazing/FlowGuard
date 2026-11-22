@@ -105,6 +105,10 @@ void transport(Reader r, std::size_t p, std::size_t end, unsigned protocol, bool
         if (protocol == 1 || protocol == 58) {
             out.transport = protocol == 1 ? TransportProtocol::Icmp : TransportProtocol::Icmpv6;
             r.need(p,4);
+            out.icmpType = static_cast<std::uint8_t>(r.u8(p));
+            out.icmpCode = static_cast<std::uint8_t>(r.u8(p+1));
+            if ((protocol == 1 && (*out.icmpType == 8 || *out.icmpType == 0)) ||
+                (protocol == 58 && (*out.icmpType == 128 || *out.icmpType == 129))) r.need(p,8);
         } else if (protocol != 59) { out.status = ParseStatus::Unsupported; out.diagnostic = "unsupported IP protocol"; }
         return;
     }
@@ -140,6 +144,8 @@ static PacketRecord parseRecord(const RawPacket& packet, std::uint64_t sequence)
             const auto h = r.u8(p+4), a = r.u8(p+5); r.need(p+8,2*(h+a));
             if (r.u16(p) != 1 || r.u16(p+2) != 0x0800 || h != 6 || a != 4) throw Failure{ParseStatus::Unsupported,"unsupported ARP address format"};
             out.sourceIp = ip(r,p+14,false); out.destinationIp = ip(r,p+24,false);
+            out.arpOpcode = static_cast<std::uint16_t>(r.u16(p+6));
+            out.arpSenderMac = mac(r,p+8);
             out.summary = "ARP opcode=" + std::to_string(r.u16(p+6));
         } else if (type == 0x0800 || type == 0x86dd) {
             const bool v6 = type == 0x86dd; const auto start = p;
@@ -245,6 +251,10 @@ std::vector<ProtocolField> fields(const RawPacket& packet, const PacketRecord& r
             }
         } else {
             r.need(p,20); nonFirst=(r.u16(p+6)&0x1fff)!=0; protocol=r.u8(p+9); const auto end=p+r.u16(p+2); p+=(r.u8(p)&15)*4; r.end=std::min(r.end,end);
+        }
+        if (record.icmpType && record.icmpCode) {
+            result.push_back({record.transport==TransportProtocol::Icmpv6 ? "ICMPv6" : "ICMP","",
+                {field("Type",number(*record.icmpType)),field("Code",number(*record.icmpCode))}});
         }
         if (nonFirst || !record.sourcePort || !record.destinationPort) return result;
         ProtocolField layer{protocol==6 ? "TCP" : "UDP","",{field("Source port",number(*record.sourcePort)),field("Destination port",number(*record.destinationPort))}};

@@ -1,6 +1,7 @@
 // Maintainer: He Junjie. Stage-2 backend / stage-3 Qt handoff contract.
 #pragma once
 #include "core/module_contracts.h"
+#include "alerts/alert_engine.h"
 
 namespace flowguard {
 enum class ProcessingState { Idle, Running, Paused, Stopped, Completed, Failed };
@@ -32,6 +33,8 @@ struct ProcessingSnapshot {
     bool savingRequested = false;
     bool savingActive = false;
     std::uint64_t savedPackets = 0;
+    std::uint64_t savedSegmentPackets = 0;
+    std::optional<std::chrono::system_clock::time_point> savedFirstTimestamp, savedLastTimestamp;
     std::uint64_t displayDroppedPackets = 0;
     std::uint64_t lateHistoryPackets = 0;
 };
@@ -51,9 +54,13 @@ public:
     OperationResult resume(); // File source only; idempotent when already running.
     OperationResult enableSaving(const std::filesystem::path&, std::uint64_t maxBytes = 1024ULL * 1024 * 1024);
     void disableSaving(); // Saving commands are acknowledged asynchronously in snapshot().
+    OperationResult finishSaving(); // Control thread: waits for writer close, never call on GUI thread.
     void stop();          // Joins worker, drains live queue, flushes/closes writer.
     ProcessingSnapshot snapshot() const;
     PacketBatch takePackets(std::size_t maxPackets = 500);
+    AlertSnapshot alertSnapshot() const;
+    OperationResult configureAlerts(const AlertRules&);
+    void pauseAlerts(bool);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
